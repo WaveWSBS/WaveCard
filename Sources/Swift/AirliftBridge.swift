@@ -325,11 +325,10 @@ public final class AirliftBridge {
             let linkIdentifier = "../../\(source)/p0/p1/p2/link"
             let payloadIdentifier = "../../\(source)/payload"
 
-            let targetPath = (target as NSString).appendingPathComponent(leaf)
-            let relativeTarget = relpath(to: targetPath, from: airlockRoot)
+            let targetDestination = (linkDest as NSString).appendingPathComponent(leaf)
 
             let identifiers = [linkIdentifier, payloadIdentifier]
-            let destinations = [linkDest, relativeTarget]
+            let destinations = [linkDest, targetDestination]
 
             let tempDir = tempBase.appendingPathComponent("aircard-write-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -414,11 +413,10 @@ public final class AirliftBridge {
 
             for (idx, file) in files.enumerated() {
                 let payloadId = "../../\(source)/payload_\(idx)"
-                let targetPath = (target as NSString).appendingPathComponent(file.leaf)
-                let rel = relpath(to: targetPath, from: airlockRoot)
+                let targetDestination = (linkDest as NSString).appendingPathComponent(file.leaf)
 
                 identifiers.append(payloadId)
-                destinations.append(rel)
+                destinations.append(targetDestination)
             }
 
             let tempDir = tempBase.appendingPathComponent("aircard-write-batch-\(UUID().uuidString)")
@@ -479,15 +477,20 @@ public final class AirliftBridge {
 
     // MARK: - Pass Cache Invalidation
 
-    /// Removes `.cache` and `.pkcache` files to force SpringBoard / Passbook to redraw card artwork.
+    /// Removes rendered card face cache entries so Wallet / SpringBoard rebuilds from .pkpass.
     public func invalidateCache(udid: String, cardHash: String) -> Bool {
-        let parentDir = "/var/mobile/Library/Passes/Cards"
-        let cacheLeaves = ["\(cardHash).cache", "\(cardHash).pkcache"]
-        return removeFiles(udid: udid, target: parentDir, leaves: cacheLeaves)
+        var allOk = true
+        let cacheLeaves = ["FrontFace", "PlaceHolder", "Preview"]
+        for ext in [".cache", ".pkcache"] {
+            let cacheDir = "/var/mobile/Library/Passes/Cards/\(cardHash)\(ext)"
+            let ok = removeFiles(udid: udid, target: cacheDir, leaves: cacheLeaves)
+            allOk = allOk && ok
+        }
+        return allOk
     }
 
-    /// Removes files by moving them into Media staging.
-    public func removeFiles(udid: String, target: String, leaves: [String], retries: Int = 2) -> Bool {
+    /// Removes specific files through the relocated Airlift symlink by moving them into Media staging.
+    public func removeFiles(udid: String, target: String, leaves: [String], retries: Int = 3) -> Bool {
         guard !leaves.isEmpty else { return true }
         guard AirliftBridge.findDeviceHelper() != nil,
               let atc = AirliftBridge.findAirTrafficHost() else { return false }
@@ -500,16 +503,13 @@ public final class AirliftBridge {
             let linkDest = "\(linkPrefix)\(token)"
             let recovered = "\(recoveredPrefix)\(token)"
 
-            var identifiers: [String] = ["../../\(source)/p0/p1/p2/link"]
+            let linkIdentifier = "../../\(source)/p0/p1/p2/link"
+            var identifiers: [String] = [linkIdentifier]
             var destinations: [String] = [linkDest]
 
             for (idx, leaf) in leaves.enumerated() {
-                let targetPath = (target as NSString).appendingPathComponent(leaf)
-                let rel = relpath(to: targetPath, from: airlockRoot)
-                let movedDst = "\(recovered)-rm-\(idx)"
-
-                identifiers.append(rel)
-                destinations.append(movedDst)
+                identifiers.append("../../\(linkDest)/\(leaf)")
+                destinations.append("\(source)/removed-\(idx)")
             }
 
             let tempDir = tempBase.appendingPathComponent("aircard-remove-\(UUID().uuidString)")
@@ -522,7 +522,7 @@ public final class AirliftBridge {
             try? FileManager.default.createDirectory(at: snapshotRoot, withIntermediateDirectories: true)
 
             do {
-                let dummy = "aircard-cache-removal".data(using: .utf8)!
+                let dummy = "aircard-v2".data(using: .utf8)!
                 let archiveData = try AirliftZip.buildArchive(target: target, payload: dummy)
                 try archiveData.write(to: archivePath)
 
@@ -530,7 +530,7 @@ public final class AirliftBridge {
                 try booksData.write(to: booksPath)
 
                 guard nativeOperation(command: "snapshot-books", udid: udid, extraArguments: [snapshotRoot.path]) else {
-                    if attempt < retries { usleep(UInt32(300_000 * attempt)); continue }
+                    if attempt < retries { usleep(UInt32(400_000 * attempt)); continue }
                     return false
                 }
 
@@ -540,7 +540,7 @@ public final class AirliftBridge {
                     _ = nativeOperation(command: "finish-write", udid: udid, extraArguments: [
                         source, linkDest, recovered, snapshotRoot.path
                     ])
-                    if attempt < retries { usleep(UInt32(300_000 * attempt)); continue }
+                    if attempt < retries { usleep(UInt32(400_000 * attempt)); continue }
                     return false
                 }
 
@@ -553,18 +553,18 @@ public final class AirliftBridge {
                     _ = nativeOperation(command: "finish-write", udid: udid, extraArguments: [
                         source, linkDest, recovered, snapshotRoot.path
                     ])
-                    if attempt < retries { usleep(UInt32(300_000 * attempt)); continue }
+                    if attempt < retries { usleep(UInt32(400_000 * attempt)); continue }
                     return false
                 }
 
-                // Cleanup moved files
-                var finishArgs = [source, linkDest, recovered, snapshotRoot.path]
-                for idx in 0..<leaves.count {
-                    finishArgs.append("\(recovered)-rm-\(idx)")
-                }
-                return nativeOperation(command: "finish-moved-removal", udid: udid, extraArguments: finishArgs)
+                // finish-moved-removal expects [source, linkDestination, recovered, snapshotRoot, expectedCount]
+                let finish = nativeOperation(command: "finish-moved-removal", udid: udid, extraArguments: [
+                    source, linkDest, recovered, snapshotRoot.path, "\(leaves.count)"
+                ])
+
+                if finish { return true }
             } catch {
-                if attempt < retries { usleep(UInt32(300_000 * attempt)) }
+                if attempt < retries { usleep(UInt32(400_000 * attempt)) }
             }
         }
         return false
