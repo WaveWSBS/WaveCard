@@ -257,7 +257,7 @@ static BOOL AirCardTraceLineHasPassSignal(NSString *line) {
     static NSArray<NSString *> *signals;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        signals = @[ @"Passes/Cards", @".pkpass", @"NanoPasses", @".pkcache" ];
+        signals = @[ @"Passes/Cards", @".pkpass", @"NanoPasses", @".pkcache", @"passIDs" ];
     });
     for (NSString *signal in signals) {
         if ([line rangeOfString:signal].location != NSNotFound) return YES;

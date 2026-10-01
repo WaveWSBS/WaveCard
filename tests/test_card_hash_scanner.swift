@@ -51,6 +51,13 @@ struct CardHashScannerTest {
             "ios18 fixture"
         )
 
+        expect(
+            CardHashScanner.quotedPassID(in: "    \"VwQQFLDxEpWKfBeCbF6ICdGzEI8=\"") == "VwQQFLDxEpWKfBeCbF6ICdGzEI8=",
+            "quoted payment pass id"
+        )
+        expect(CardHashScanner.quotedPassID(in: "\"has spaces here\"") == nil, "reject quoted sentence")
+        expect(CardHashScanner.quotedPassID(in: "VwQQFLDxEpWKfBeCbF6ICdGzEI8=") == nil, "require quotes")
+
         if failed == 0 {
             print("ok")
         } else {

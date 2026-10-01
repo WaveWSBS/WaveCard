@@ -40,6 +40,16 @@ public enum CardHashScanner {
         return candidate.unicodeScalars.allSatisfy { allowed.contains($0) }
     }
 
+    /// A log continuation line that is only a quoted pass id, e.g. `    "AbC…="`.
+    /// Payment passes surface their identifiers this way through nfcd instead of
+    /// as `.pkpass` resource lookups.
+    public static func quotedPassID(in line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 3, trimmed.hasPrefix("\""), trimmed.hasSuffix("\"") else { return nil }
+        let candidate = String(trimmed.dropFirst().dropLast())
+        return isValid(candidate) ? candidate : nil
+    }
+
     /// Unique pass ids found in one log line, in order of appearance.
     public static func hashes(in line: String) -> [String] {
         var seen = Set<String>()
