@@ -196,6 +196,8 @@ struct CardInspectorView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.regular)
+                            .disabled(vm.isScanningCards || vm.isBackingUp || vm.isFlashing || vm.device == nil)
+                            .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Backup original artwork for this card")
 
                             if hasBackup {
                                 Button(action: { vm.restoreCard(cardHash: card.id) }) {

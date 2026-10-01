@@ -81,6 +81,9 @@ struct MainContentView: View {
             .padding(20)
             .frame(width: 380)
         }
+        .sheet(isPresented: $vm.showBackupModal) {
+            BackupCardsSheetView(vm: vm)
+        }
         .alert(vm.successAlertTitle, isPresented: $vm.showSuccessAlert) {
             Button("OK", role: .cancel) { }
         } message: {

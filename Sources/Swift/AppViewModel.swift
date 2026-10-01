@@ -45,6 +45,7 @@ public final class AppViewModel: ObservableObject {
     @Published public var successAlertMessage: String = ""
     @Published public var showManualAddModal: Bool = false
     @Published public var showAddCardSheet: Bool = false
+    @Published public var showBackupModal: Bool = false
 
     // MARK: - Internal Timers & Processes
     private var devicePollTask: Task<Void, Never>?
@@ -109,11 +110,13 @@ public final class AppViewModel: ObservableObject {
                 device = first
                 log("Connected to device: \(first.name ?? "iPhone")", level: .info)
                 fetchAllOriginalArtworks()
+                if !isScanningCards { startScanning() }
             }
         } else {
             missedDevicePolls += 1
             if missedDevicePolls >= 2, device != nil {
                 log("Device disconnected.", level: .warning)
+                stopScanning()
                 device = nil
             }
         }
@@ -399,22 +402,21 @@ public final class AppViewModel: ObservableObject {
                     let isWallet = lower.contains("passd") || lower.contains("passbook") ||
                                    lower.contains("passkit") || lower.contains("stockholm") ||
                                    lower.contains("nanopassd") || lower.contains("wallet") ||
-                                   lower.contains("/cards/")
+                                   lower.contains("passids") || lower.contains("/cards/")
 
-                    guard isWallet else { continue }
+                    guard isWallet || CardHashScanner.quotedPassID(in: line) != nil else { continue }
 
                     let detected = CardHashScanner.hashes(in: line)
                     guard !detected.isEmpty else { continue }
 
                     await MainActor.run {
-                        guard self.scanProcess === proc else { return }
                         for candidate in detected where !self.cards.contains(where: { $0.id == candidate }) {
                             let newCard = CardItem(id: candidate, isSelected: true)
                             self.cards.append(newCard)
                             self.saveCards()
                             self.log("✓ Detected card: \(candidate)", level: .success)
                             NSSound(named: "Glass")?.play()
-                            self.loadOriginalArtwork(for: newCard)
+                            // Artwork reading skipped during scan for safety
                         }
                     }
                 }
@@ -662,6 +664,52 @@ public final class AppViewModel: ObservableObject {
                     self.statusText = "Restoration failed."
                     self.errorMessage = "Failed to restore original pass files to device."
                 }
+            }
+        }
+    }
+
+    func restoreAllCards() {
+        guard let dev = device, dev.connected else {
+            errorMessage = "No iPhone connected."
+            return
+        }
+        guard !isScanningCards else {
+            errorMessage = "Please stop the card scanner before restoring."
+            return
+        }
+
+        isRestoring = true
+        statusText = "Restoring all cards from local artwork..."
+        log("Starting bulk restore of all cards...", level: .info)
+
+        Task.detached(priority: .userInitiated) {
+            let backups = CardBackupManager.shared.listBackups()
+            var restored = 0
+
+            for (idx, b) in backups.enumerated() {
+                await MainActor.run {
+                    self.statusText = "Restoring [\(idx + 1)/\(backups.count)]: \(b.label)..."
+                    self.progress = Double(idx) / Double(max(1, backups.count))
+                }
+                let ok = await CardBackupManager.shared.restoreCard(
+                    udid: dev.udid,
+                    cardHash: b.cardHash,
+                    onLog: { msg in
+                        Task { @MainActor in self.log(msg, level: .info) }
+                    }
+                )
+                if ok { restored += 1 }
+            }
+
+            let finalCount = restored
+            await MainActor.run {
+                self.isRestoring = false
+                self.progress = 1.0
+                self.statusText = "Restore complete: \(finalCount)/\(backups.count) cards."
+                self.successAlertTitle = "Cards Restored"
+                self.successAlertMessage = "Successfully restored \(finalCount) card(s) to factory artwork on your iPhone!\n\nPlease force close the Wallet app on your iPhone (swipe up in app switcher) and reopen it."
+                self.showSuccessAlert = true
+                self.log("✓ Bulk restore finished (\(finalCount)/\(backups.count) cards).", level: .success)
             }
         }
     }

@@ -208,7 +208,8 @@ struct CardItemView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .help("Backup original artwork to Mac")
+                            .disabled(vm.isScanningCards || vm.isBackingUp || vm.isFlashing || vm.device == nil)
+                            .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Backup original artwork to Mac")
 
                             if hasOriginalBackup {
                                 Button(action: { vm.restoreCard(cardHash: card.id) }) {

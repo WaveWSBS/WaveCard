@@ -107,6 +107,18 @@ struct BackupsView: View {
 
                 Spacer()
 
+                if !vm.backups.isEmpty {
+                    Button(action: {
+                        vm.restoreAllCards()
+                    }) {
+                        Label("Restore All to iPhone", systemImage: "arrow.counterclockwise.circle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .disabled(vm.isRestoring || vm.device == nil || vm.isScanningCards)
+                }
+
                 Button(action: {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: CardBackupManager.shared.backupsRootURL.path)
                 }) {

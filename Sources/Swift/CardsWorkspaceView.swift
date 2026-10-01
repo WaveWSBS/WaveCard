@@ -178,12 +178,12 @@ struct CardsWorkspaceView: View {
                 .disabled(vm.cards.isEmpty)
                 .help("Assign a custom skin image to all selected cards")
 
-                // Backup Selected
-                Button(action: { vm.backupSelectedCards() }) {
-                    Label("Backup", systemImage: "arrow.down.doc")
+                // Backup All / Selected Modal Trigger
+                Button(action: { vm.showBackupModal = true }) {
+                    Label("Backup Artwork...", systemImage: "arrow.down.doc")
                 }
-                .disabled(vm.cards.isEmpty || vm.isBackingUp || vm.isFlashing)
-                .help("Backup original factory artwork for selected cards")
+                .disabled(vm.cards.isEmpty || vm.isScanningCards || vm.isBackingUp || vm.isFlashing)
+                .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Open backup window to backup cards")
 
                 // Flash Action (Prominent)
                 Button(action: { vm.flashSelectedCards() }) {
