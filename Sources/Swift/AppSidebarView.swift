@@ -25,7 +25,7 @@ struct AppSidebarView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text("AirCard")
+                        Text("WaveCard")
                             .font(.system(size: 15, weight: .bold))
                         Text("2.0")
                             .font(.system(size: 10, weight: .heavy))

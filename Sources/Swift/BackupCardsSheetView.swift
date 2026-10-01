@@ -100,7 +100,7 @@ struct BackupCardsSheetView: View {
                 Image(systemName: "folder")
                     .foregroundColor(.secondary)
                     .font(.system(size: 11))
-                Text("Stored safely at ~/Documents/AirCard/Backups")
+                Text("Stored safely at ~/Documents/WaveCard/Backups")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                 Spacer()

@@ -19,7 +19,7 @@ public final class CardAssetManager {
 
     private init() {
         let appSupport = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        self.cacheDirectory = appSupport.appendingPathComponent("com.mak5er.aircard/cards", isDirectory: true)
+        self.cacheDirectory = appSupport.appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
     }
 

@@ -228,7 +228,7 @@ public final class AirliftBridge {
             let identifiers = [linkIdentifier, targetIdentifier]
             let destinations = [linkDest, recovered]
 
-            let tempDir = tempBase.appendingPathComponent("aircard-read-\(UUID().uuidString)")
+            let tempDir = tempBase.appendingPathComponent("wavecard-read-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -239,7 +239,7 @@ public final class AirliftBridge {
             try? FileManager.default.createDirectory(at: snapshotRoot, withIntermediateDirectories: true)
 
             do {
-                let dummy = "aircard-backup-staging".data(using: .utf8)!
+                let dummy = "wavecard-backup-staging".data(using: .utf8)!
                 let archiveData = try AirliftZip.buildArchive(target: target, payload: dummy)
                 try archiveData.write(to: archivePath)
 
@@ -336,7 +336,7 @@ public final class AirliftBridge {
             let identifiers = [linkIdentifier, payloadIdentifier]
             let destinations = [linkDest, targetDestination]
 
-            let tempDir = tempBase.appendingPathComponent("aircard-write-\(UUID().uuidString)")
+            let tempDir = tempBase.appendingPathComponent("wavecard-write-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -425,7 +425,7 @@ public final class AirliftBridge {
                 destinations.append(targetDestination)
             }
 
-            let tempDir = tempBase.appendingPathComponent("aircard-write-batch-\(UUID().uuidString)")
+            let tempDir = tempBase.appendingPathComponent("wavecard-write-batch-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -518,7 +518,7 @@ public final class AirliftBridge {
                 destinations.append("\(source)/removed-\(idx)")
             }
 
-            let tempDir = tempBase.appendingPathComponent("aircard-remove-\(UUID().uuidString)")
+            let tempDir = tempBase.appendingPathComponent("wavecard-remove-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -528,7 +528,7 @@ public final class AirliftBridge {
             try? FileManager.default.createDirectory(at: snapshotRoot, withIntermediateDirectories: true)
 
             do {
-                let dummy = "aircard-v2".data(using: .utf8)!
+                let dummy = "wavecard-v2".data(using: .utf8)!
                 let archiveData = try AirliftZip.buildArchive(target: target, payload: dummy)
                 try archiveData.write(to: archivePath)
 

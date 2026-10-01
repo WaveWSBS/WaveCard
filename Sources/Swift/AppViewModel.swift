@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 import Combine
 
-/// Central application state manager for AirCard (macOS HIG).
+/// Central application state manager for WaveCard (macOS HIG).
 /// Pure Swift implementation handling USB device polling, real-time Apple Wallet card scanning,
 /// artwork caching, skin flashing, and full pass backup/restore.
 @MainActor
@@ -55,9 +55,9 @@ public final class AppViewModel: ObservableObject {
 
     public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let aircardDir = appSupport.appendingPathComponent("AirCard", isDirectory: true)
-        try? FileManager.default.createDirectory(at: aircardDir, withIntermediateDirectories: true)
-        self.cardsStoreURL = aircardDir.appendingPathComponent("saved_cards.json")
+        let wavecardDir = appSupport.appendingPathComponent("WaveCard", isDirectory: true)
+        try? FileManager.default.createDirectory(at: wavecardDir, withIntermediateDirectories: true)
+        self.cardsStoreURL = wavecardDir.appendingPathComponent("saved_cards.json")
 
         loadSavedCards()
         refreshBackups()
@@ -578,7 +578,7 @@ public final class AppViewModel: ObservableObject {
                 self.isBackingUp = false
                 self.refreshBackups()
                 if ok {
-                    self.statusText = "Backup saved to Documents/AirCard/Backups"
+                    self.statusText = "Backup saved to Documents/WaveCard/Backups"
                     self.successAlertTitle = "Backup Complete"
                     self.successAlertMessage = "Original card artwork for '\(card.label)' has been saved safely to your Mac.\n\nYou can restore it anytime with one click."
                     self.showSuccessAlert = true
@@ -625,7 +625,7 @@ public final class AppViewModel: ObservableObject {
                 self.refreshBackups()
                 self.statusText = "Backed up \(savedCount)/\(selected.count) cards."
                 self.successAlertTitle = "Backup Complete"
-                self.successAlertMessage = "\(savedCount) card original(s) successfully backed up to Documents/AirCard/Backups."
+                self.successAlertMessage = "\(savedCount) card original(s) successfully backed up to Documents/WaveCard/Backups."
                 self.showSuccessAlert = true
             }
         }

@@ -1,4 +1,4 @@
-# AirCard 2.0 💳
+# WaveCard 2.0 💳
 
 > **Apple Wallet Card Skinner for iOS 18+ (No Jailbreak Required)**  
 > **Tested on iOS 18 through iOS 26+ release.**  
@@ -14,7 +14,7 @@
   - **Inspector Panel:** Inline card naming, hash copying, original vs custom artwork comparison, and granular actions.
 - 📱 **Native Card Artwork Extraction:** Directly reads the real factory card background (`cardBackgroundCombined@3x.png` / `@2x.png` / `.pdf`) from your iPhone and displays the actual card face on the canvas.
 - 💾 **1-Click Backup & Restore:**
-  - Safely backs up original card assets to `~/Documents/AirCard/Backups/` with metadata and thumbnails.
+  - Safely backs up original card assets to `~/Documents/WaveCard/Backups/` with metadata and thumbnails.
   - One-click **Restore to iPhone** flashes factory assets back to the device whenever you want to revert.
 - ⚡ **100% Pure Swift (Zero Python):**
   - All image scaling, Aspect Fill, and vector PDF generation run natively via CoreGraphics (`CGContext`, `CGPDFContext`).
@@ -27,17 +27,17 @@
 ## Installation
 
 ### macOS (Universal DMG)
-1. Download **`AirCard.dmg`** from [Releases](https://github.com/mak5er/AirCard/releases).
-2. Open `AirCard.dmg` and drag **`AirCard.app`** into your **Applications** folder.
+1. Download **`WaveCard.dmg`** from [Releases](https://github.com/WaveWSBS/WaveCard/releases).
+2. Open `WaveCard.dmg` and drag **`WaveCard.app`** into your **Applications** folder.
 3. Fully compatible with both **Apple Silicon** and **Intel (x86)** Macs.
 
 > [!NOTE]
 > **First Launch on macOS (Gatekeeper):**
 > If macOS displays an unidentified developer prompt on first launch:
-> - **Method 1 (UI):** Right-click `AirCard.app` in Applications ➔ click **Open** ➔ click **Open**.
+> - **Method 1 (UI):** Right-click `WaveCard.app` in Applications ➔ click **Open** ➔ click **Open**.
 > - **Method 2 (Terminal):**
 >   ```sh
->   sudo xattr -cr /Applications/AirCard.app
+>   sudo xattr -cr /Applications/WaveCard.app
 >   ```
 
 ---
@@ -45,12 +45,12 @@
 ## How to Customize Apple Wallet Cards
 
 1. Connect your iPhone to your Mac via USB cable and unlock it.
-2. In AirCard, click **Scan Cards** in the toolbar.
+2. In WaveCard, click **Scan Cards** in the toolbar.
 3. On your iPhone:
    - **Double-click the Side button** to open Apple Pay.
    - Authenticate with **Face ID** or **Touch ID**.
    - **Tap your card** to trigger instant real-time detection!
-4. AirCard will detect the pass hash and automatically extract its real background artwork.
+4. WaveCard will detect the pass hash and automatically extract its real background artwork.
 5. Drag and drop any custom image onto the card (or click **Set Skin**).
 6. *(Optional)* Click **Backup** to store a factory copy of your card's artwork on your Mac.
 7. Click **Flash to iPhone** (or select multiple cards to batch flash).
@@ -63,7 +63,7 @@
 If you ever want to revert back to your card's original appearance:
 1. Navigate to **Card Backups** in the sidebar (or open the right Inspector for the card).
 2. Click **Restore to iPhone**.
-3. AirCard will write the factory files back to `/var/mobile/Library/Passes/Cards/<hash>.pkpass` and invalidate render caches.
+3. WaveCard will write the factory files back to `/var/mobile/Library/Passes/Cards/<hash>.pkpass` and invalidate render caches.
 4. Force-close Apple Wallet on your iPhone to verify.
 
 ---
@@ -71,9 +71,9 @@ If you ever want to revert back to your card's original appearance:
 ## Building from Source
 
 ```bash
-git clone https://github.com/mak5er/AirCard.git
-cd AirCard
+git clone https://github.com/WaveWSBS/WaveCard.git
+cd WaveCard
 ./build.sh
 ```
 
-Outputs universal binaries for `arm64` and `x86_64` and builds `build/AirCard.dmg`.
+Outputs universal binaries for `arm64` and `x86_64` and builds `build/WaveCard.dmg`.

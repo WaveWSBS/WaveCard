@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AirCardApp: App {
+struct WaveCardApp: App {
     var body: some Scene {
         WindowGroup {
             MainContentView()

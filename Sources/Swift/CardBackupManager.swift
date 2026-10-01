@@ -45,7 +45,7 @@ public final class CardBackupManager {
 
     private init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        self.backupsRoot = docs.appendingPathComponent("AirCard/Backups", isDirectory: true)
+        self.backupsRoot = docs.appendingPathComponent("WaveCard/Backups", isDirectory: true)
         try? FileManager.default.createDirectory(at: backupsRoot, withIntermediateDirectories: true)
     }
 
@@ -88,7 +88,7 @@ public final class CardBackupManager {
 
         // Also index cards cached in Library/Caches
         let cacheBase = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("com.mak5er.aircard/cards", isDirectory: true)
+            .appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
         if let cacheDirs = try? FileManager.default.contentsOfDirectory(at: cacheBase, includingPropertiesForKeys: nil) {
             for dir in cacheDirs {
                 let cardHash = dir.lastPathComponent

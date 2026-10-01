@@ -97,7 +97,7 @@ struct MainContentView: View {
         } message: {
             Text(vm.errorMessage ?? "")
         }
-        .navigationTitle("AirCard")
+        .navigationTitle("WaveCard")
         .frame(minWidth: 920, minHeight: 620)
     }
 }
