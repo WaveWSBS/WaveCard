@@ -20,7 +20,7 @@ public struct CardBackup: Identifiable, Codable, Hashable {
 
     public var thumbnailURL: URL? {
         let base = URL(fileURLWithPath: folderPath)
-        for name in ["cardBackgroundCombined@3x.png", "cardBackgroundCombined@2x.png", "cardBackgroundCombined.png"] {
+        for name in ["cardBackgroundCombined@3x.png", "cardBackgroundCombined@2x.png", "cardBackgroundCombined.png", "original.png"] {
             let candidate = base.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
@@ -59,26 +59,57 @@ public final class CardBackupManager {
     public func hasBackup(for cardHash: String) -> Bool {
         let folder = backupFolder(for: cardHash)
         let manifest = folder.appendingPathComponent("backup.json")
-        return FileManager.default.fileExists(atPath: manifest.path)
+        if FileManager.default.fileExists(atPath: manifest.path) {
+            return true
+        }
+        let cachedOriginal = CardAssetManager.shared.originalCacheURL(for: cardHash)
+        return FileManager.default.fileExists(atPath: cachedOriginal.path)
     }
 
     public func listBackups() -> [CardBackup] {
-        guard let subdirs = try? FileManager.default.contentsOfDirectory(
+        var results: [CardBackup] = []
+        var seenHashes = Set<String>()
+
+        if let subdirs = try? FileManager.default.contentsOfDirectory(
             at: backupsRoot,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        var results: [CardBackup] = []
-        for dir in subdirs {
-            let manifestURL = dir.appendingPathComponent("backup.json")
-            guard FileManager.default.fileExists(atPath: manifestURL.path),
-                  let data = try? Data(contentsOf: manifestURL),
-                  let backup = try? JSONDecoder().decode(CardBackup.self, from: data) else {
-                continue
+        ) {
+            for dir in subdirs {
+                let manifestURL = dir.appendingPathComponent("backup.json")
+                if FileManager.default.fileExists(atPath: manifestURL.path),
+                   let data = try? Data(contentsOf: manifestURL),
+                   let backup = try? JSONDecoder().decode(CardBackup.self, from: data) {
+                    results.append(backup)
+                    seenHashes.insert(backup.cardHash)
+                }
             }
-            results.append(backup)
         }
+
+        // Also index cards cached in Library/Caches
+        let cacheBase = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.mak5er.aircard/cards", isDirectory: true)
+        if let cacheDirs = try? FileManager.default.contentsOfDirectory(at: cacheBase, includingPropertiesForKeys: nil) {
+            for dir in cacheDirs {
+                let cardHash = dir.lastPathComponent
+                guard !seenHashes.contains(cardHash) else { continue }
+                let orig = dir.appendingPathComponent("original.png")
+                if FileManager.default.fileExists(atPath: orig.path) {
+                    let backup = CardBackup(
+                        cardHash: cardHash,
+                        label: "Card " + String(cardHash.prefix(8)),
+                        date: (try? orig.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date(),
+                        deviceModel: "iPhone",
+                        iosVersion: nil,
+                        files: ["original.png"],
+                        folderPath: dir.path
+                    )
+                    results.append(backup)
+                    seenHashes.insert(cardHash)
+                }
+            }
+        }
+
         return results.sorted { $0.date > $1.date }
     }
 
@@ -155,22 +186,42 @@ public final class CardBackupManager {
     ) async -> Bool {
         let folder = backupFolder(for: cardHash)
         guard hasBackup(for: cardHash) else {
-            onLog("No backup exists for card \(cardHash)")
+            onLog("No backup or cached original exists for card \(cardHash.prefix(8))")
             return false
         }
 
         let manifestURL = folder.appendingPathComponent("backup.json")
-        guard let data = try? Data(contentsOf: manifestURL),
-              let backup = try? JSONDecoder().decode(CardBackup.self, from: data) else {
-            onLog("Backup manifest is corrupted")
-            return false
+        var filesToRestore: [(leaf: String, payload: Data)] = []
+        var cardLabel = "Card \(cardHash.prefix(8))"
+
+        if let data = try? Data(contentsOf: manifestURL),
+           let backup = try? JSONDecoder().decode(CardBackup.self, from: data) {
+            cardLabel = backup.label
+            for filename in backup.files {
+                // NEVER write back pass.json - only artwork files! Writing pass.json invalidates signature on iOS.
+                guard filename.starts(with: "cardBackgroundCombined") else { continue }
+                let fileURL = folder.appendingPathComponent(filename)
+                guard let fileData = try? Data(contentsOf: fileURL) else { continue }
+                filesToRestore.append((leaf: filename, payload: fileData))
+            }
         }
 
-        var filesToRestore: [(leaf: String, payload: Data)] = []
-        for filename in backup.files {
-            let fileURL = folder.appendingPathComponent(filename)
-            guard let fileData = try? Data(contentsOf: fileURL) else { continue }
-            filesToRestore.append((leaf: filename, payload: fileData))
+        let hasArtwork = filesToRestore.contains(where: { $0.leaf.starts(with: "cardBackgroundCombined") })
+        if !hasArtwork {
+            let cachedOrigURL = CardAssetManager.shared.originalCacheURL(for: cardHash)
+            if let origData = try? Data(contentsOf: cachedOrigURL) {
+                if let nsImg = NSImage(data: origData),
+                   let assets = CardAssetManager.shared.prepareCardAssets(from: nsImg) {
+                    filesToRestore.append((leaf: "cardBackgroundCombined@3x.png", payload: assets.png3x))
+                    filesToRestore.append((leaf: "cardBackgroundCombined@2x.png", payload: assets.png2x))
+                    filesToRestore.append((leaf: "cardBackgroundCombined.pdf", payload: assets.pdf))
+                    onLog("Prepared full asset suite (@3x, @2x, .pdf) from cached original (\(origData.count) bytes)")
+                } else {
+                    filesToRestore.append((leaf: "cardBackgroundCombined@3x.png", payload: origData))
+                    filesToRestore.append((leaf: "cardBackgroundCombined@2x.png", payload: origData))
+                    onLog("Using raw locally cached original artwork (\(origData.count) bytes)")
+                }
+            }
         }
 
         guard !filesToRestore.isEmpty else {
@@ -179,7 +230,7 @@ public final class CardBackupManager {
         }
 
         let pkpassDir = "/var/mobile/Library/Passes/Cards/\(cardHash).pkpass"
-        onLog("Restoring \(filesToRestore.count) file(s) to device...")
+        onLog("Writing \(filesToRestore.count) restored file(s) to iPhone...")
 
         let writeOk = AirliftBridge.shared.writeFilesBatch(
             udid: udid,
@@ -193,9 +244,9 @@ public final class CardBackupManager {
             return false
         }
 
-        onLog("Invalidating Passbook cache...")
+        onLog("Invalidating Passbook render cache...")
         _ = AirliftBridge.shared.invalidateCache(udid: udid, cardHash: cardHash)
-        onLog("✓ Restore complete for \(backup.label)!")
+        onLog("✓ Restore complete for \(cardLabel)!")
         return true
     }
 

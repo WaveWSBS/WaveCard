@@ -163,12 +163,8 @@ public final class CardAssetManager {
             }
         }
 
-        // Fallback: non-payment passes keep no .pkpass artwork, but Wallet caches
-        // the rendered face in <hash>.cache / <hash>.pkcache as a keyed archive.
-        if let data = fetchCachedImageSetFace(udid: udid, cardHash: cardHash) {
-            saveCachedOriginal(cardHash: cardHash, data: data)
-            return data
-        }
+        // Note: Do NOT attempt to read .cache / .pkcache via readFile as a directory.
+        // On iOS, .cache / .pkcache are files, not folders, and moving them corrupts the cache.
 
         return nil
     }
