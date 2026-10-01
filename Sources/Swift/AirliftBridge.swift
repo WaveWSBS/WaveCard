@@ -286,20 +286,26 @@ public final class AirliftBridge {
                 }
 
                 let data = try Data(contentsOf: localOut)
+                // AirTraffic has already moved the pass file into Media. Never
+                // clean that copy up until the same bytes are back in the pkpass.
+                guard !data.isEmpty else {
+                    _ = nativeOperation(command: "finish-write", udid: udid, extraArguments: [
+                        source, linkDest, recovered, snapshotRoot.path
+                    ])
+                    if attempt < retries { usleep(UInt32(400_000 * attempt)); continue }
+                    return nil
+                }
 
-                // 5. Restore original back immediately on device!
                 let restored = writeFile(udid: udid, target: target, leaf: leaf, payload: data, retries: 3)
-
-                // 6. Finish cleanup
-                let finish = nativeOperation(command: "finish-write", udid: udid, extraArguments: [
-                    source, linkDest, recovered, snapshotRoot.path
-                ])
-
-                if restored && finish {
-                    return data
-                } else if !data.isEmpty {
+                guard restored else {
+                    // Leave the recovered file in Media. finish-write would delete it.
                     return data
                 }
+
+                _ = nativeOperation(command: "finish-write", udid: udid, extraArguments: [
+                    source, linkDest, recovered, snapshotRoot.path
+                ])
+                return data
             } catch {
                 if attempt < retries { usleep(UInt32(400_000 * attempt)) }
             }

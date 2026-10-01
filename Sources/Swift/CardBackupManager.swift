@@ -209,7 +209,8 @@ public final class CardBackupManager {
         let hasArtwork = filesToRestore.contains(where: { $0.leaf.starts(with: "cardBackgroundCombined") })
         if !hasArtwork {
             let cachedOrigURL = CardAssetManager.shared.originalCacheURL(for: cardHash)
-            if let origData = try? Data(contentsOf: cachedOrigURL) {
+            if let origData = try? Data(contentsOf: cachedOrigURL),
+               CardAssetManager.isBankArtwork(origData) {
                 if let nsImg = NSImage(data: origData),
                    let assets = CardAssetManager.shared.prepareCardAssets(from: nsImg) {
                     filesToRestore.append((leaf: "cardBackgroundCombined@3x.png", payload: assets.png3x))

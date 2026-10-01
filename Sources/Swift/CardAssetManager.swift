@@ -138,7 +138,7 @@ public final class CardAssetManager {
 
         for leaf in candidates {
             guard let data = AirliftBridge.shared.readFile(udid: udid, target: pkpassDir, leaf: leaf, retries: 1),
-                  Self.isRasterImage(data) else {
+                  Self.isBankArtwork(data) else {
                 continue
             }
             saveCachedOriginal(cardHash: cardHash, data: data)
@@ -163,65 +163,10 @@ public final class CardAssetManager {
             }
         }
 
-        // Note: Do NOT attempt to read .cache / .pkcache via readFile as a directory.
-        // On iOS, .cache / .pkcache are files, not folders, and moving them corrupts the cache.
+        // Wallet's FrontFace is a separate rendered bitmap. It already has the
+        // last four digits painted on, so it is never a stand-in for the bank art.
 
         return nil
-    }
-
-    /// Reads Wallet's rendered face image set (FrontFace/PlaceHolder/Preview) from
-    /// the pass render cache and extracts the archived face image.
-    private func fetchCachedImageSetFace(udid: String, cardHash: String) -> Data? {
-        let base = "/var/mobile/Library/Passes/Cards/\(cardHash)"
-        for ext in [".cache", ".pkcache"] {
-            for leaf in ["FrontFace", "Preview", "PlaceHolder"] {
-                guard let raw = AirliftBridge.shared.readFile(udid: udid, target: base + ext, leaf: leaf, retries: 1) else {
-                    continue
-                }
-                if let image = Self.decodeImageSetFace(from: raw), Self.isRasterImage(image) {
-                    return image
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Unarchives a `PK*ImageSet` and pulls the face image bytes out of it.
-    private static func decodeImageSetFace(from raw: Data) -> Data? {
-        guard let start = raw.range(of: Data("bplist00".utf8))?.lowerBound else { return nil }
-        let payload = raw.subdata(in: start..<raw.endIndex)
-
-        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: payload) {
-            unarchiver.requiresSecureCoding = false
-            unarchiver.decodingFailurePolicy = .setErrorAndReturn
-            for name in ["PKPassFrontFaceImageSet", "PKPassPlaceHolderImageSet", "PKPassPreviewImageSet", "PKPassImageSet"] {
-                unarchiver.setClass(PKImageSetShim.self, forClassName: name)
-            }
-            unarchiver.setClass(PKImageShim.self, forClassName: "PKImage")
-            unarchiver.setClass(PKColorShim.self, forClassName: "PKColor")
-            if let set = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? PKImageSetShim,
-               let image = set.images.first {
-                return image
-            }
-        }
-
-        return decodeLargestEmbeddedImage(from: payload)
-    }
-
-    /// Last-resort scan for the biggest PNG/JPEG stored in the archive's data objects.
-    private static func decodeLargestEmbeddedImage(from payload: Data) -> Data? {
-        guard let plist = try? PropertyListSerialization.propertyList(from: payload, options: [], format: nil),
-              let dict = plist as? [String: Any],
-              let objects = dict["$objects"] as? [Any] else { return nil }
-
-        var best: Data?
-        for case let object as [String: Any] in objects {
-            guard let data = object["NS.data"] as? Data, isRasterImage(data) else { continue }
-            if best == nil || data.count > best!.count {
-                best = data
-            }
-        }
-        return best
     }
 
     /// PNG or JPEG bytes. PDF is rendered separately; other payloads are not card faces.
@@ -229,6 +174,40 @@ public final class CardAssetManager {
         if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return true }
         if data.count >= 3, data.starts(with: [0xFF, 0xD8, 0xFF]) { return true }
         return false
+    }
+
+    /// Bank artwork is full-bleed. Wallet's composited face is a rounded card on a
+    /// transparent canvas, with the last four digits already painted into the pixels.
+    static func isBankArtwork(_ data: Data) -> Bool {
+        guard isRasterImage(data), !isCompositedWalletFace(data) else { return false }
+        return true
+    }
+
+    static func isCompositedWalletFace(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              image.width > 4, image.height > 4 else { return false }
+        let width = image.width
+        let height = image.height
+        let corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
+        return corners.allSatisfy { alpha(of: image, x: $0.0, y: $0.1) == 0 }
+    }
+
+    private static func alpha(of image: CGImage, x: Int, y: Int) -> UInt8 {
+        guard let cropped = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)) else { return 255 }
+        var pixel = [UInt8](repeating: 255, count: 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &pixel,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 255 }
+        context.draw(cropped, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return pixel[3]
     }
 
     // MARK: - Local Cache Directory Operations
@@ -242,6 +221,7 @@ public final class CardAssetManager {
     }
 
     public func saveCachedOriginal(cardHash: String, data: Data) {
+        guard Self.isBankArtwork(data) else { return }
         let dir = cacheDirectory.appendingPathComponent(cardHash)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = originalCacheURL(for: cardHash)
@@ -258,7 +238,11 @@ public final class CardAssetManager {
     }
 
     public func loadCachedOriginal(for cardHash: String) -> NSImage? {
-        cachedImage(at: originalCacheURL(for: cardHash))
+        let url = originalCacheURL(for: cardHash)
+        let key = url.path as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        guard let data = try? Data(contentsOf: url), Self.isBankArtwork(data) else { return nil }
+        return cachedImage(at: url)
     }
 
     public func loadCachedCustom(for cardHash: String) -> NSImage? {
@@ -280,36 +264,4 @@ public final class CardAssetManager {
         imageCache.removeObject(forKey: url.path as NSString)
         try? FileManager.default.removeItem(at: url)
     }
-}
-
-@objc(AirCardPKImageShim)
-private final class PKImageShim: NSObject, NSCoding {
-    let imageData: Data?
-
-    init?(coder: NSCoder) {
-        imageData = coder.decodeObject(forKey: "imageData") as? Data
-    }
-
-    func encode(with coder: NSCoder) {}
-}
-
-@objc(AirCardPKImageSetShim)
-private final class PKImageSetShim: NSObject, NSCoding {
-    let images: [Data]
-
-    init?(coder: NSCoder) {
-        let keys = ["faceImage", "placeHolderImage", "iconImage", "rawIcon", "image"]
-        images = keys.compactMap {
-            (coder.decodeObject(forKey: $0) as? PKImageShim)?.imageData
-        }
-    }
-
-    func encode(with coder: NSCoder) {}
-}
-
-@objc(AirCardPKColorShim)
-private final class PKColorShim: NSObject, NSCoding {
-    init?(coder: NSCoder) {}
-
-    func encode(with coder: NSCoder) {}
 }
