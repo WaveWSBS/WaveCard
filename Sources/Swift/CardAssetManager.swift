@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import CryptoKit
 
 /// Manages card asset processing, aspect-fill resizing to exact Apple Wallet specs,
 /// vector PDF generation, and local card caching.
@@ -163,10 +164,94 @@ public final class CardAssetManager {
             }
         }
 
+        // Shell payment passes keep no PNG in the pkpass. Artwork lives at
+        // Apple's asset broker, listed in a .urls sidecar.
+        if let data = await fetchArtworkFromURLSidecar(udid: udid, pkpassDir: pkpassDir) {
+            saveCachedOriginal(cardHash: cardHash, data: data)
+            return data
+        }
+
         // Wallet's FrontFace is a separate rendered bitmap. It already has the
         // last four digits painted on, so it is never a stand-in for the bank art.
 
         return nil
+    }
+
+    /// Reads `cardBackgroundCombined*.urls` and downloads the largest bank asset.
+    private func fetchArtworkFromURLSidecar(udid: String, pkpassDir: String) async -> Data? {
+        let sidecars = [
+            "cardBackgroundCombined.png.urls",
+            "cardBackgroundCombined@2x.png.urls",
+            "cardBackgroundCombined@3x.png.urls"
+        ]
+        for leaf in sidecars {
+            guard let raw = AirliftBridge.shared.readFile(udid: udid, target: pkpassDir, leaf: leaf, retries: 1),
+                  let assets = Self.parsePassAssetURLs(raw), !assets.isEmpty else {
+                continue
+            }
+            for asset in assets {
+                if let data = await Self.downloadBankArtwork(asset) {
+                    return data
+                }
+            }
+        }
+        return nil
+    }
+
+    private struct RemotePassAsset {
+        let name: String
+        let url: URL
+        let size: Int
+        let sha1: String?
+    }
+
+    /// PassKit sidecar JSON: `{ "cardBackgroundCombined@2x.png": { "url", "size", "sha1" } }`.
+    private static func parsePassAssetURLs(_ data: Data) -> [RemotePassAsset]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        var assets: [RemotePassAsset] = []
+        for (name, value) in obj {
+            let isBackground = name.contains("cardBackgroundCombined") || name.contains("cardBackground")
+            guard isBackground, !name.contains("icon"),
+                  let dict = value as? [String: Any],
+                  let urlString = dict["url"] as? String,
+                  let url = URL(string: urlString),
+                  url.scheme?.lowercased() == "https" else { continue }
+            let size = (dict["size"] as? Int) ?? (dict["size"] as? NSNumber)?.intValue ?? 0
+            let sha1 = dict["sha1"] as? String
+            assets.append(RemotePassAsset(name: name, url: url, size: size, sha1: sha1))
+        }
+        guard !assets.isEmpty else { return nil }
+        return assets.sorted { a, b in
+            func rank(_ name: String) -> Int {
+                if name.contains("@3x") { return 3 }
+                if name.contains("@2x") { return 2 }
+                return 1
+            }
+            let ra = rank(a.name)
+            let rb = rank(b.name)
+            if ra != rb { return ra > rb }
+            return a.size > b.size
+        }
+    }
+
+    private static func downloadBankArtwork(_ asset: RemotePassAsset) async -> Data? {
+        var request = URLRequest(url: asset.url)
+        request.timeoutInterval = 30
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            if let expected = asset.sha1?.lowercased() {
+                let digest = Insecure.SHA1.hash(data: data)
+                let hex = digest.map { String(format: "%02x", $0) }.joined()
+                guard hex == expected else { return nil }
+            }
+            guard isBankArtwork(data) else { return nil }
+            return data
+        } catch {
+            return nil
+        }
     }
 
     /// PNG or JPEG bytes. PDF is rendered separately; other payloads are not card faces.
