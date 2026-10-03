@@ -104,7 +104,6 @@ public struct LogEntry: Identifiable {
 
 public enum NavigationTab: String, CaseIterable, Identifiable {
     case cards = "Wallet Cards"
-    case backups = "Backups"
     case logs = "Activity Console"
 
     public var id: String { rawValue }
@@ -112,7 +111,6 @@ public enum NavigationTab: String, CaseIterable, Identifiable {
     public var icon: String {
         switch self {
         case .cards: return "creditcard.fill"
-        case .backups: return "arrow.counterclockwise.circle.fill"
         case .logs: return "terminal.fill"
         }
     }

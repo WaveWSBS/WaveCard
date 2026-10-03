@@ -11,7 +11,7 @@ struct CardInspectorView: View {
     }
 
     private var originalImage: NSImage? {
-        vm.originalImages[cardId] ?? CardAssetManager.shared.loadCachedOriginal(for: cardId)
+        vm.originalImages[cardId] ?? CardAssetManager.shared.loadOriginal(for: cardId)
     }
 
     private var customImage: NSImage? {
@@ -21,8 +21,8 @@ struct CardInspectorView: View {
         return CardAssetManager.shared.loadCachedCustom(for: cardId)
     }
 
-    private var hasBackup: Bool {
-        CardBackupManager.shared.hasBackup(for: cardId)
+    private var hasStoredOriginal: Bool {
+        vm.hasOriginal(for: cardId)
     }
 
     var body: some View {
@@ -190,16 +190,16 @@ struct CardInspectorView: View {
 
                         // Action Buttons
                         VStack(spacing: 10) {
-                            Button(action: { vm.backupCard(cardId: card.id) }) {
-                                Label("Backup Pass Artwork", systemImage: "arrow.down.doc")
+                            Button(action: { vm.exportOriginalPNG(cardId: card.id) }) {
+                                Label("Export Original as PNG", systemImage: "square.and.arrow.up")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.regular)
-                            .disabled(vm.isScanningCards || vm.isBackingUp || vm.isFlashing || vm.device == nil)
-                            .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Backup original artwork for this card")
+                            .disabled(vm.isExporting)
+                            .help("Save this card's original Apple artwork as a PNG file")
 
-                            if hasBackup {
+                            if hasStoredOriginal {
                                 Button(action: { vm.restoreCard(cardHash: card.id) }) {
                                     Label("Restore Original to iPhone", systemImage: "arrow.counterclockwise")
                                         .frame(maxWidth: .infinity)
@@ -207,6 +207,7 @@ struct CardInspectorView: View {
                                 .buttonStyle(.bordered)
                                 .tint(.green)
                                 .controlSize(.regular)
+                                .disabled(vm.isRestoring || vm.isScanningCards || vm.isFlashing)
                             }
 
                             Button(role: .destructive, action: { vm.deleteCard(id: card.id) }) {

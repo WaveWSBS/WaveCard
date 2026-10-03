@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CardsWorkspaceView: View {
     @ObservedObject var vm: AppViewModel
@@ -49,8 +50,8 @@ struct CardsWorkspaceView: View {
                 )
             }
 
-            // Progress Banner when flashing or backing up
-            if vm.isFlashing || vm.isBackingUp || vm.isRestoring {
+            // Progress Banner when flashing, fetching originals, exporting, or restoring
+            if vm.isFlashing || vm.isFetchingOriginals || vm.isRestoring || vm.isExporting {
                 VStack(spacing: 6) {
                     HStack {
                         ProgressView()
@@ -178,12 +179,21 @@ struct CardsWorkspaceView: View {
                 .disabled(vm.cards.isEmpty)
                 .help("Assign a custom skin image to all selected cards")
 
-                // Backup All / Selected Modal Trigger
-                Button(action: { vm.showBackupModal = true }) {
-                    Label("Backup Artwork...", systemImage: "arrow.down.doc")
+                // Pull the factory artwork of every card that has none stored.
+                Button(action: { vm.fetchAllOriginals() }) {
+                    Label("Fetch All Originals", systemImage: "arrow.down.doc")
                 }
-                .disabled(vm.cards.isEmpty || vm.isScanningCards || vm.isBackingUp || vm.isFlashing)
-                .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Open backup window to backup cards")
+                .disabled(vm.cards.isEmpty || vm.isScanningCards || vm.isFetchingOriginals || vm.isFlashing || vm.device == nil)
+                .help(vm.isScanningCards
+                      ? "Please finish or stop scanning first"
+                      : "Read and store the original Apple artwork for every card missing one")
+
+                // Bulk restore
+                Button(action: { vm.showRestoreAllConfirm = true }) {
+                    Label("Restore All", systemImage: "arrow.counterclockwise")
+                }
+                .disabled(vm.cards.isEmpty || vm.isRestoring || vm.device == nil || vm.isScanningCards)
+                .help("Rebuild factory artwork on every card that has an original stored")
 
                 // Flash Action (Prominent)
                 Button(action: { vm.flashSelectedCards() }) {
@@ -194,6 +204,13 @@ struct CardsWorkspaceView: View {
                 .tint(.purple)
                 .disabled(vm.cards.isEmpty || vm.isFlashing || vm.device == nil)
                 .help("Flash custom skins to selected cards via native Airlift")
+
+                // Batch export of stored originals
+                Button(action: { vm.exportSelectedOriginals() }) {
+                    Label("Export PNGs...", systemImage: "square.and.arrow.up")
+                }
+                .disabled(vm.cards.isEmpty || vm.isExporting)
+                .help("Save the original artwork of every selected card as a PNG file")
             }
         }
     }

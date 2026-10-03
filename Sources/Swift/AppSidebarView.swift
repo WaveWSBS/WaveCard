@@ -120,22 +120,6 @@ struct AppSidebarView: View {
                             }
                         }
                     }
-
-                    NavigationLink(value: NavigationTab.backups) {
-                        HStack {
-                            Label("Card Backups", systemImage: "arrow.counterclockwise.circle.fill")
-                                .font(.system(size: 13, weight: .medium))
-                            Spacer()
-                            if !vm.backups.isEmpty {
-                                Text("\(vm.backups.count)")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 1)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .clipShape(Capsule())
-                            }
-                        }
-                    }
                 }
 
                 Section("SYSTEM") {
@@ -151,6 +135,20 @@ struct AppSidebarView: View {
                             }
                         }
                     }
+
+                    Button(action: { vm.revealOriginalsInFinder() }) {
+                        HStack {
+                            Label("Originals Folder", systemImage: "folder")
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer()
+                            Text("\(vm.cards.filter { vm.hasOriginal(for: $0.id) }.count)")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.primary)
+                    .help("Reveal ~/Documents/WaveCard/Originals in Finder")
                 }
             }
             .listStyle(.sidebar)

@@ -14,13 +14,20 @@ public final class CardAssetManager {
     public static let cardTargetSize3x = CGSize(width: 1536, height: 969)
     public static let cardTargetSize2x = CGSize(width: 1024, height: 646)
 
-    private let cacheDirectory: URL
+    /// Bank artwork is the backup: one PNG per card, kept out of Library/Caches
+    /// so the system cannot purge it.
+    private let originalsDirectory: URL
+    /// Custom skins are a throwaway render cache and may live in Library/Caches.
+    private let customCacheDirectory: URL
     private let imageCache = NSCache<NSString, NSImage>()
 
     private init() {
-        let appSupport = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        self.cacheDirectory = appSupport.appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        self.originalsDirectory = docs.appendingPathComponent("WaveCard/Originals", isDirectory: true)
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        self.customCacheDirectory = caches.appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
+        try? FileManager.default.createDirectory(at: originalsDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: customCacheDirectory, withIntermediateDirectories: true)
     }
 
     // MARK: - CoreGraphics Aspect-Fill Scaling & PNG Export
@@ -120,10 +127,11 @@ public final class CardAssetManager {
     // MARK: - Native Card Background Loading from iPhone
 
     /// Extracts original card background data from connected device via Airlift.
+    /// Always yields PNG bytes and always leaves a copy in Originals/.
     public func fetchOriginalArtworkData(udid: String, cardHash: String) async -> Data? {
-        // Return existing cached version immediately if available
-        if let cached = loadCachedOriginal(for: cardHash), let tiff = cached.tiffRepresentation {
-            return tiff
+        // An original already on disk is the backup; never re-read the phone.
+        if let stored = originalPNGData(for: cardHash) {
+            return stored
         }
 
         guard CardHashScanner.isValid(cardHash) else { return nil }
@@ -142,7 +150,7 @@ public final class CardAssetManager {
                   Self.isBankArtwork(data) else {
                 continue
             }
-            saveCachedOriginal(cardHash: cardHash, data: data)
+            saveOriginal(cardHash: cardHash, data: data)
             return data
         }
 
@@ -158,7 +166,7 @@ public final class CardAssetManager {
             if let context = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height), bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) {
                 context.drawPDFPage(page)
                 if let cgImage = context.makeImage(), let png = cgImageToPNG(cgImage: cgImage) {
-                    saveCachedOriginal(cardHash: cardHash, data: png)
+                    saveOriginal(cardHash: cardHash, data: png)
                     return png
                 }
             }
@@ -167,7 +175,7 @@ public final class CardAssetManager {
         // Shell payment passes keep no PNG in the pkpass. Artwork lives at
         // Apple's asset broker, listed in a .urls sidecar.
         if let data = await fetchArtworkFromURLSidecar(udid: udid, pkpassDir: pkpassDir) {
-            saveCachedOriginal(cardHash: cardHash, data: data)
+            saveOriginal(cardHash: cardHash, data: data)
             return data
         }
 
@@ -295,39 +303,53 @@ public final class CardAssetManager {
         return pixel[3]
     }
 
-    // MARK: - Local Cache Directory Operations
+    // MARK: - Local Originals (the backup) & Custom Skin Cache
 
-    public func originalCacheURL(for cardHash: String) -> URL {
-        cacheDirectory.appendingPathComponent(cardHash).appendingPathComponent("original.png")
+    public var originalsRootURL: URL { originalsDirectory }
+
+    public func originalFileURL(for cardHash: String) -> URL {
+        originalsDirectory.appendingPathComponent("\(cardHash).png")
+    }
+
+    /// A card is "backed up" exactly when its original PNG exists on disk.
+    public func hasOriginal(for cardHash: String) -> Bool {
+        FileManager.default.fileExists(atPath: originalFileURL(for: cardHash).path)
     }
 
     public func customCacheURL(for cardHash: String) -> URL {
-        cacheDirectory.appendingPathComponent(cardHash).appendingPathComponent("custom.png")
+        customCacheDirectory.appendingPathComponent(cardHash).appendingPathComponent("custom.png")
     }
 
-    public func saveCachedOriginal(cardHash: String, data: Data) {
+    public func saveOriginal(cardHash: String, data: Data) {
         guard Self.isBankArtwork(data) else { return }
-        let dir = cacheDirectory.appendingPathComponent(cardHash)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = originalCacheURL(for: cardHash)
+        let url = originalFileURL(for: cardHash)
+        try? FileManager.default.createDirectory(at: originalsDirectory, withIntermediateDirectories: true)
         try? data.write(to: url)
         imageCache.removeObject(forKey: url.path as NSString)
     }
 
     public func saveCachedCustom(cardHash: String, data: Data) {
-        let dir = cacheDirectory.appendingPathComponent(cardHash)
+        let dir = customCacheDirectory.appendingPathComponent(cardHash)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = customCacheURL(for: cardHash)
         try? data.write(to: url)
         imageCache.removeObject(forKey: url.path as NSString)
     }
 
-    public func loadCachedOriginal(for cardHash: String) -> NSImage? {
-        let url = originalCacheURL(for: cardHash)
+    public func loadOriginal(for cardHash: String) -> NSImage? {
+        let url = originalFileURL(for: cardHash)
         let key = url.path as NSString
         if let cached = imageCache.object(forKey: key) { return cached }
         guard let data = try? Data(contentsOf: url), Self.isBankArtwork(data) else { return nil }
         return cachedImage(at: url)
+    }
+
+    /// Reads the stored PNG without decoding it. Export and restore want the
+    /// original bytes, not a resampled NSImage.
+    public func originalPNGData(for cardHash: String) -> Data? {
+        let url = originalFileURL(for: cardHash)
+        guard let data = try? Data(contentsOf: url), Self.isBankArtwork(data) else { return nil }
+        return data
     }
 
     public func loadCachedCustom(for cardHash: String) -> NSImage? {
@@ -348,5 +370,103 @@ public final class CardAssetManager {
         let url = customCacheURL(for: cardHash)
         imageCache.removeObject(forKey: url.path as NSString)
         try? FileManager.default.removeItem(at: url)
+    }
+
+    // MARK: - One-Shot Migration From The Pre-Originals Layout
+
+    /// Older builds kept the bank art twice: as `original.png` inside
+    /// Library/Caches (purgeable) and as a five-file dump in
+    /// `~/Documents/WaveCard/Backups/<hash>/` guarded by a `backup.json`
+    /// manifest. Both collapse into one PNG under Originals/.
+    ///
+    /// Runs once per install. Existing originals are never overwritten, and a
+    /// legacy folder is only deleted once its bytes are either in Originals or
+    /// confirmed to hold no usable bank art.
+    @discardableResult
+    public func migrateLegacyOriginalsOnce() -> (migrated: Int, removed: Bool) {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("WaveCard", isDirectory: true)
+        let flag = support.appendingPathComponent(".originals-migrated", isDirectory: false)
+        guard !FileManager.default.fileExists(atPath: flag.path) else { return (0, false) }
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+
+        var migrated = 0
+        var removedAllLegacyFolders = true
+
+        // Documents dumps come first: they may hold @3x, the highest resolution
+        // copy of the bank art available anywhere on the Mac.
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let legacyBackups = docs.appendingPathComponent("WaveCard/Backups", isDirectory: true)
+        let artworkLeaves = [
+            "cardBackgroundCombined@3x.png",
+            "cardBackgroundCombined@2x.png",
+            "cardBackgroundCombined.png"
+        ]
+
+        if let legacyDirs = try? FileManager.default.contentsOfDirectory(
+            at: legacyBackups,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for dir in legacyDirs {
+                let cardHash = dir.lastPathComponent
+                guard CardHashScanner.isValid(cardHash) else {
+                    removedAllLegacyFolders = false
+                    continue
+                }
+
+                var usableBytes = Data()
+                for leaf in artworkLeaves {
+                    guard let data = try? Data(contentsOf: dir.appendingPathComponent(leaf)),
+                          Self.isBankArtwork(data) else { continue }
+                    usableBytes = data
+                    break
+                }
+
+                if usableBytes.isEmpty {
+                    // Nothing worth keeping (only pass.json, or a composited
+                    // Wallet face). Dropping it loses no bank art.
+                    try? FileManager.default.removeItem(at: dir)
+                    continue
+                }
+
+                if hasOriginal(for: cardHash) {
+                    // A better copy already landed, from Caches or an earlier run.
+                    try? FileManager.default.removeItem(at: dir)
+                    continue
+                }
+
+                saveOriginal(cardHash: cardHash, data: usableBytes)
+                if hasOriginal(for: cardHash) {
+                    migrated += 1
+                    try? FileManager.default.removeItem(at: dir)
+                } else {
+                    removedAllLegacyFolders = false
+                }
+            }
+
+            if removedAllLegacyFolders,
+               let remaining = try? FileManager.default.contentsOfDirectory(atPath: legacyBackups.path),
+               remaining.isEmpty {
+                try? FileManager.default.removeItem(at: legacyBackups)
+            }
+        }
+
+        // Fill in anything still missing from the old purgeable cache.
+        let cacheCards = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
+        if let cacheDirs = try? FileManager.default.contentsOfDirectory(at: cacheCards, includingPropertiesForKeys: nil) {
+            for dir in cacheDirs {
+                let cardHash = dir.lastPathComponent
+                guard CardHashScanner.isValid(cardHash), !hasOriginal(for: cardHash) else { continue }
+                guard let data = try? Data(contentsOf: dir.appendingPathComponent("original.png")),
+                      Self.isBankArtwork(data) else { continue }
+                saveOriginal(cardHash: cardHash, data: data)
+                migrated += 1
+            }
+        }
+
+        try? Data().write(to: flag)
+        return (migrated, removedAllLegacyFolders)
     }
 }

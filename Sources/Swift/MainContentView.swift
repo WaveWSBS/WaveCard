@@ -13,8 +13,6 @@ struct MainContentView: View {
                 switch vm.selectedNav {
                 case .cards:
                     CardsWorkspaceView(vm: vm)
-                case .backups:
-                    BackupsView(vm: vm)
                 case .logs:
                     LogsView(vm: vm)
                 }
@@ -81,8 +79,15 @@ struct MainContentView: View {
             .padding(20)
             .frame(width: 380)
         }
-        .sheet(isPresented: $vm.showBackupModal) {
-            BackupCardsSheetView(vm: vm)
+        .confirmationDialog(
+            "Restore all cards to factory artwork?",
+            isPresented: $vm.showRestoreAllConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Restore All", role: .destructive) { vm.restoreAllCards() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Every card with a stored original will have its Apple artwork rebuilt and written back to your iPhone. Any custom skins on those cards will be replaced.")
         }
         .alert(vm.successAlertTitle, isPresented: $vm.showSuccessAlert) {
             Button("OK", role: .cancel) { }

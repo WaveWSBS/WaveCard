@@ -21,15 +21,15 @@ struct CardItemView: View {
         if let memOrig = vm.originalImages[card.id] {
             return memOrig
         }
-        return CardAssetManager.shared.loadCachedOriginal(for: card.id)
+        return CardAssetManager.shared.loadOriginal(for: card.id)
     }
 
     private var hasCustomSkin: Bool {
         card.customImageURL != nil || CardAssetManager.shared.loadCachedCustom(for: card.id) != nil
     }
 
-    private var hasOriginalBackup: Bool {
-        CardBackupManager.shared.hasBackup(for: card.id)
+    private var hasStoredOriginal: Bool {
+        vm.hasOriginal(for: card.id)
     }
 
     var body: some View {
@@ -143,11 +143,11 @@ struct CardItemView: View {
                                     .clipShape(Capsule())
                             }
 
-                            if hasOriginalBackup {
+                            if hasStoredOriginal {
                                 Image(systemName: "checkmark.shield.fill")
                                     .font(.system(size: 11))
                                     .foregroundColor(.green)
-                                    .help("Original pass backed up safely")
+                                    .help("Original artwork stored on this Mac")
                             }
                         }
                     }
@@ -202,23 +202,24 @@ struct CardItemView: View {
                                 .help("Clear custom skin")
                             }
 
-                            Button(action: { vm.backupCard(cardId: card.id) }) {
-                                Image(systemName: "arrow.down.doc")
+                            Button(action: { vm.exportOriginalPNG(cardId: card.id) }) {
+                                Image(systemName: "square.and.arrow.up")
                                     .font(.system(size: 11))
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(vm.isScanningCards || vm.isBackingUp || vm.isFlashing || vm.device == nil)
-                            .help(vm.isScanningCards ? "Please finish or stop scanning before backing up" : "Backup original artwork to Mac")
+                            .disabled(vm.isExporting)
+                            .help("Export the original artwork as a PNG file")
 
-                            if hasOriginalBackup {
+                            if hasStoredOriginal {
                                 Button(action: { vm.restoreCard(cardHash: card.id) }) {
                                     Image(systemName: "arrow.counterclockwise")
                                         .font(.system(size: 11))
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
-                                .help("Restore to original pass")
+                                .disabled(vm.isRestoring || vm.isScanningCards || vm.isFlashing)
+                                .help("Restore factory artwork to this card")
                             }
                         }
                         .padding(.horizontal, 10)
