@@ -27,7 +27,7 @@ struct AppSidebarView: View {
                     HStack(spacing: 6) {
                         Text("WaveCard")
                             .font(.system(size: 15, weight: .bold))
-                        Text("2.0")
+                        Text("2.1")
                             .font(.system(size: 10, weight: .heavy))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
