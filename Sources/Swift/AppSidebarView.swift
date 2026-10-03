@@ -154,20 +154,6 @@ struct AppSidebarView: View {
             .listStyle(.sidebar)
 
             Spacer()
-
-            // Bottom Device Helper Info
-            HStack(spacing: 8) {
-                Image(systemName: "bolt.shield.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(.accentColor)
-                Text("Native Airlift Engine · Zero Python")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(NSColor.windowBackgroundColor))
         }
         .frame(minWidth: 230, idealWidth: 250, maxWidth: 280)
     }
