@@ -16,7 +16,6 @@ WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and 
 - 🖼️ **True factory artwork extraction** — pulls the real `cardBackgroundCombined` art off the phone (PNG, vector PDF, or Apple's asset-broker sidecar), not a screenshot, and keeps a copy on your Mac.
 - 💾 **Originals on disk + one-click restore** — every factory card face is saved as a PNG in `~/Documents/WaveCard/Originals/` and can be rebuilt onto the phone at any time, individually or all at once.
 - 📤 **Export anywhere** — pull the original artwork out as PNG files for archival, design reference, or anything else.
-- ⚡ **100% Pure Swift core (Zero Python)** — scaling, aspect-fill, vector PDF generation, PKZip packaging with Apple `0x5A53` extra attributes, and binary `Books.plist` generation all run natively via `CoreGraphics` / `CGContext` / `CGPDFContext`. Two tiny Objective-C command-line helpers bridge the private frameworks.
 - 📦 **~2.4 MB** universal DMG (Apple Silicon + Intel).
 
 > **Formerly known as AirCard.** WaveCard 1.x shipped as *AirCard*; the project was renamed in v2.0. Old bookmarks and links to `AirCard` refer to this same tool — nothing to reinstall, just a new name.
