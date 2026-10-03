@@ -6,18 +6,20 @@
 [![Release](https://img.shields.io/github/v/release/WaveWSBS/WaveCard?label=Release&color=6C5CE7)](https://github.com/WaveWSBS/WaveCard/releases)
 [![macOS](https://img.shields.io/badge/macOS-14.0%2B-000000?logo=apple)](https://github.com/WaveWSBS/WaveCard/releases)
 [![iOS](https://img.shields.io/badge/iPhone-iOS%2018%2B-000000?logo=apple)](https://github.com/WaveWSBS/WaveCard/releases)
-[![Swift](https://img.shields.io/badge/core-Swift%20%2B%20CoreGraphics-F05138?logo=swift)](https://github.com/WaveWSBS/WaveCard)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-6C5CE7)](https://github.com/WaveWSBS/WaveCard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and `AirTrafficHost` frameworks. It **sniffs** card passes out of the unified device log, **reads** the real factory artwork out of each `.pkpass` on the device, and **writes** your replacement artwork back — then clears Wallet's render cache so the new design actually shows up.
 
 - 🖥️ **macOS app, no runtime dependencies** — no Python, no Homebrew, no `libimobiledevice`, no Xcode required to *use* it.
 - 🔍 **Real-time card detection** — click **Scan Cards**, then double-click the Side button and pay. Cards appear by themselves.
-- 🖼️ **True factory artwork extraction** — pulls the real `cardBackgroundCombined` art off the phone (PNG, vector PDF, or Apple's asset-broker sidecar), not a screenshot.
-- 💾 **Automatic original backup** — the factory artwork is stored as a single PNG per card the first time it is read off your iPhone. Restore any card, or all of them, in one click.
-- 📤 **PNG export** — save the stored originals out as ordinary image files, one card or a whole selected batch.
+- 🖼️ **True factory artwork extraction** — pulls the real `cardBackgroundCombined` art off the phone (PNG, vector PDF, or Apple's asset-broker sidecar), not a screenshot, and keeps a copy on your Mac.
+- 💾 **Originals on disk + one-click restore** — every factory card face is saved as a PNG in `~/Documents/WaveCard/Originals/` and can be rebuilt onto the phone at any time, individually or all at once.
+- 📤 **Export anywhere** — pull the original artwork out as PNG files for archival, design reference, or anything else.
 - ⚡ **100% Pure Swift core (Zero Python)** — scaling, aspect-fill, vector PDF generation, PKZip packaging with Apple `0x5A53` extra attributes, and binary `Books.plist` generation all run natively via `CoreGraphics` / `CGContext` / `CGPDFContext`. Two tiny Objective-C command-line helpers bridge the private frameworks.
 - 📦 **~2.4 MB** universal DMG (Apple Silicon + Intel).
+
+> **Formerly known as AirCard.** WaveCard 1.x shipped as *AirCard*; the project was renamed in v2.0. Old bookmarks and links to `AirCard` refer to this same tool — nothing to reinstall, just a new name.
 
 ---
 
@@ -31,12 +33,13 @@ WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and 
   - [2. Scan for cards](#2-scan-for-cards)
   - [3. Fetch the factory artwork](#3-fetch-the-factory-artwork)
   - [4. Assign a custom skin](#4-assign-a-custom-skin)
-  - [5. Make sure the original is stored](#5-make-sure-the-original-is-stored)
-  - [6. Flash to iPhone](#6-flash-to-iphone)
-  - [7. See it in Wallet](#7-see-it-in-wallet)
+  - [5. Flash to iPhone](#5-flash-to-iphone)
+  - [6. See it in Wallet](#6-see-it-in-wallet)
+  - [Export originals as PNG](#export-originals-as-png)
   - [Restore factory artwork](#restore-factory-artwork)
   - [Activity Console](#activity-console)
 - [How It Works](#how-it-works)
+- [Built With](#built-with)
 - [Where your data lives](#where-your-data-lives)
 - [Important notes & risks](#important-notes--risks)
 - [Troubleshooting](#troubleshooting)
@@ -82,9 +85,9 @@ WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and 
 1. Connect and unlock your iPhone; tap **Trust This Computer** if prompted.
 2. In WaveCard, click **Scan Cards** in the toolbar.
 3. On the iPhone: double-click the **Side button**, pass **Face ID**, and tap a card.
-4. The card (and its real artwork) shows up in **Wallet Cards** automatically.
-5. Drop an image on the card, or press **Set Skin**.
-6. *(Recommended)* Press **Fetch All Originals** so every card has its factory copy stored before you flash.
+4. The card shows up in **Wallet Cards** automatically.
+5. Press **Fetch All Originals** so the factory art is saved to your Mac.
+6. Drop an image on the card, or press **Set Skin**.
 7. Select the card and press **Flash to iPhone**.
 8. Force-close **Wallet** on the iPhone and reopen it.
 
@@ -92,7 +95,7 @@ WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and 
 
 ## Full Guide
 
-The sidebar has two sections: **LIBRARY** → *Wallet Cards* and **SYSTEM** → *Activity Console* plus an **Originals Folder** shortcut that reveals `~/Documents/WaveCard/Originals` in Finder.
+The sidebar has two sections: **LIBRARY** → *Wallet Cards*, and **SYSTEM** → *Activity Console* and *Originals Folder*.
 
 ### 1. Connect your iPhone
 
@@ -112,9 +115,9 @@ No luck? **Add Card** lets you paste a hash manually — handy if you already ha
 
 ### 3. Fetch the factory artwork
 
-New cards show `Reading artwork from iPhone...`. WaveCard reads, in order, `cardBackgroundCombined@2x.png`, `@3x.png`, `.png`, `.pdf`, then falls back to Apple's asset-broker `.urls` sidecar for cards that keep no local PNG. Wallet's own composited `FrontFace` bitmap is explicitly rejected, so what you see really is the bank's art.
+New cards show `Reading artwork from iPhone...`. **Fetch All Originals** in the toolbar (or **Fetch from iPhone** on a single card) reads, in order, `cardBackgroundCombined@2x.png`, `@3x.png`, `.png`, then falls back to `cardBackgroundCombined.pdf` and finally Apple's asset-broker `.urls` sidecar for cards that keep no local PNG. The result is normalized to a PNG and saved to `~/Documents/WaveCard/Originals/<hash>.png`.
 
-If a card shows **Fetch from iPhone**, press it to (re)read the artwork.
+Wallet's own composited `FrontFace` bitmap is explicitly rejected, so what you store really is the bank's art. Once stored, the original is never re-read from the phone.
 
 ### 4. Assign a custom skin
 
@@ -124,33 +127,27 @@ If a card shows **Fetch from iPhone**, press it to (re)read the artwork.
 
 PNG, JPEG, HEIC and WebP are supported. The image is aspect-filled and rendered to the exact sizes Wallet expects.
 
-### 5. Make sure the original is stored
-
-The backup *is* the factory artwork, pulled automatically the first time a card is read. It lands as one PNG at `~/Documents/WaveCard/Originals/<hash>.png` — outside the purgeable cache, so macOS cannot quietly delete it. Cards with a stored original show a green shield.
-
-Press **Fetch All Originals** (toolbar) to pull the artwork for every card that has none yet. It runs in the background through the same serial queue as everything else, so it is safe to leave unattended. Export and restore only work on cards whose original is stored, so do this before flashing.
-
-### 6. Flash to iPhone
+### 5. Flash to iPhone
 
 Select one or more cards (**Select All** / **Deselect All** help) and press **Flash to iPhone**. Each card is rendered and written in a single batched AirTraffic sync, then Wallet's `FrontFace` / `PlaceHolder` / `Preview` render caches are invalidated. Progress is reported live in the banner and the console.
 
-### 7. See it in Wallet
+### 6. See it in Wallet
 
 Force-close **Wallet** from the App Switcher (or lock and unlock the iPhone). If a card still looks stale, reboot the phone — the app warns you when cache invalidation was incomplete.
 
 ### Export originals as PNG
 
-- **Single card:** the export icon on a card tile, or **Export Original as PNG** in the inspector, opens a save panel pre-filled with `<Card Name>-<hash8>.png`.
-- **Everything selected:** **Export PNGs...** (toolbar) picks a folder and writes one PNG per selected card.
+- **One card:** hover the tile (or open the inspector) ➔ **Export Original as PNG**
+- **Several cards:** select them ➔ **Export PNGs...** and choose a folder
 
-Exported files are the stored bytes written verbatim — no rescaling — so they stay usable as source material. If a card has no original stored yet, WaveCard reads it off the iPhone first rather than writing nothing. Existing filenames are never overwritten; collisions get a `-2` suffix.
+Files are named `<Card Label>-<hash8>.png` and written byte-for-byte as stored — handy for keeping an archive or using the real bank art as a design reference.
 
 ### Restore factory artwork
 
-- **Single card:** the restore icon on a card tile, or **Restore Original to iPhone** in the inspector.
-- **Everything:** **Restore All** (toolbar), which asks for confirmation first.
+- **One card:** hover the tile ➔ the restore icon, or inspector ➔ **Restore Original to iPhone**
+- **Every card that has an original:** toolbar ➔ **Restore All**, then confirm with **Restore All**
 
-Restore regenerates `@3x` / `@2x` / `.pdf` at Apple's exact card dimensions from the stored PNG, writes them in one batched sync, and invalidates Wallet's render caches. Only ever artwork files — `pass.json` is never rewritten, because doing so breaks the pass signature on iOS.
+WaveCard rebuilds the full artwork suite (`@3x`, `@2x`, `.pdf`) from the stored PNG, writes it back in one batched sync, and clears Wallet's render caches. `pass.json` is never rewritten — doing so invalidates the pass signature on iOS and the card stops opening in Wallet.
 
 ### Activity Console
 
@@ -166,7 +163,7 @@ A live, searchable log of every device operation with `INFO` / `SUCCESS` / `WARN
 │  ├── device_helper      (ObjC) MobileDevice.framework   │
 │  │     • discover / pair / validate pairing             │
 │  │     • os_trace_relay unified log stream ── scanner   │
-│  │     • AFC streaming_zip_conduit ── Books staging     │
+│  │     • AFC + streaming_zip_conduit ── Books staging   │
 │  └── airtraffic_host    (ObjC) AirTrafficHost.framework  │
 │        • "airlift" sync host: SyncAllowed → ReadyForSync │
 │        → MetadataSyncFinished → per-asset completion     │
@@ -175,9 +172,9 @@ A live, searchable log of every device operation with `INFO` / `SUCCESS` / `WARN
 
 **Detection.** `com.apple.syslog_relay` omits Wallet card paths on iOS 18, so WaveCard requests the *unified activity stream* from `com.apple.os_trace_relay` instead, decodes the binary frames in-process (5-byte header, big-endian lengths for plist replies, little-endian for activity records) and pre-filters for `Passes/Cards`, `.pkpass`, `.pkcache`, `passIDs` and friends. See [docs/wallet-card-detection.md](docs/wallet-card-detection.md).
 
-**Extraction.** `/var/mobile/Library/Passes/Cards/<hash>.pkpass` is exported through the AirTraffic link, read over AFC, and the original bytes are written straight back so the pass never loses its Media copy.
+**Extraction.** `/var/mobile/Library/Passes/Cards/<hash>.pkpass` is exported through the AirTraffic link, read over AFC, and the original bytes are written straight back so the pass never loses its Media copy. Vector PDFs are rasterized with `CGPDFDocument`; asset-broker downloads are verified against the sidecar's SHA-1 with `CryptoKit` before being accepted.
 
-**Writing.** WaveCard builds an uncompressed PKZip itself — `META-INF/com.apple.ZipMetadata.plist`, per-path directory entries, a `p0/p1/p2/link` symlink and `payload_N` entries — carrying Apple's `SZ_EXTRA_ID` (`0x5A53`) extra field and matching central-directory attributes, plus a binary `Books.plist` describing the book/asset relocation. That is staged over AFC into `Books/Sync/Books.plist`, synced by `airtraffic_host`, and cleaned up byte-for-byte against a preimage snapshot. Three leaves are written per card:
+**Writing.** WaveCard builds an uncompressed PKZip itself — `META-INF/com.apple.ZipMetadata.plist`, per-path directory entries, a `p0/p1/p2/link` symlink and `payload_N` entries — carrying Apple's `SZ_EXTRA_ID` (`0x5A53`) extra field with the POSIX mode bits, a `zlib` CRC-32 per entry, and a binary `Books.plist` describing the book/asset relocation. That is staged over AFC into `Books/Sync/Books.plist`, synced by `airtraffic_host`, and cleaned up byte-for-byte against a preimage snapshot. Three leaves are written per card:
 
 | Asset | Size |
 |---|---|
@@ -185,7 +182,25 @@ A live, searchable log of every device operation with `INFO` / `SUCCESS` / `WARN
 | `cardBackgroundCombined@2x.png` | 1024 × 646 |
 | `cardBackgroundCombined.pdf` | vector, 3x box |
 
-**Cache invalidation.** Wallet's `FrontFace`, `PlaceHolder` and `Preview` leaves are removed from `<hash>.cache` and `<hash>.pkcache` after every write and every restore.
+**Cache invalidation.** Wallet's `FrontFace`, `PlaceHolder` and `Preview` leaves are removed from `<hash>.cache` and `<hash>.pkcache` after every flash and every restore.
+
+---
+
+## Built With
+
+No third-party dependencies — every layer is an Apple platform API.
+
+| Layer | Technology |
+|---|---|
+| UI | **SwiftUI** (`NavigationSplitView`, toolbar, inspector, drag & drop) + **AppKit** (`NSOpenPanel` / `NSSavePanel` / `NSWorkspace`) |
+| State | `ObservableObject` + **Combine**, serialized device queues |
+| Imaging | **CoreGraphics** (`CGContext` aspect-fill scaling, PNG encode) and `CGPDFContext` / `CGPDFDocument` for vector output |
+| Integrity | **CryptoKit** (`Insecure.SHA1`) to verify asset-broker artwork, **zlib** `crc32` for PKZip entries |
+| File types | `UniformTypeIdentifiers` for image import filtering |
+| Device link | **MobileDevice.framework** (private) — pairing, AFC, `os_trace_relay`, `streaming_zip_conduit` |
+| Sync engine | **AirTrafficHost.framework** (private) — the `airlift` book sync protocol |
+| Packaging | `swiftc` + `lipo` universal binary, ad-hoc `codesign`, `hdiutil` / `create-dmg`, `Makefile` + `build.sh` |
+| CI | **GitHub Actions** on `macos-15` — tests, universal build, tagged-release publishing |
 
 ---
 
@@ -193,26 +208,25 @@ A live, searchable log of every device operation with `INFO` / `SUCCESS` / `WARN
 
 | Path | Contents |
 |---|---|
-| `~/Documents/WaveCard/Originals/<hash>.png` | Stored factory artwork — this is the backup |
-| `~/Library/Caches/com.WaveWSBS.wavecard/cards/<hash>/` | `custom.png` — throwaway render cache for assigned skins |
-| `~/Library/Application Support/WaveCard/saved_cards.json` | Card library (label, hash, skin path) |
+| `~/Documents/WaveCard/Originals/<hash>.png` | Factory artwork pulled off the iPhone — the source of truth for restores and exports |
+| `~/Library/Application Support/WaveCard/saved_cards.json` | Card library (`id`, `label`, `customImagePath`) |
+| `~/Library/Caches/com.WaveWSBS.wavecard/cards/<hash>/` | Rendered skin cache (`custom.png`) |
 | `/var/mobile/Library/Passes/Cards/<hash>.pkpass` *(on iPhone)* | The pass itself |
 
-Nothing is uploaded anywhere; WaveCard talks only to the connected iPhone.
+Originals live in `Documents` on purpose — the system cache can be purged, your factory card art cannot. Nothing is uploaded anywhere; WaveCard talks only to the connected iPhone.
 
 ---
 
 ## Important notes & risks
 
 > [!WARNING]
-> **This tool modifies system pass files on your iPhone. Back up your cards before you start.**
-> - Flashing is a best-effort modification of Apple Wallet internals. It is **not** endorsed by Apple and may void issuer agreements.
-> - **An iOS update can overwrite or invalidate a skinned card**, and a pass can occasionally stop rendering entirely. If a card breaks, restore it from its stored original or remove and re-add it from Wallet.
-> - **Copy `~/Documents/WaveCard/Originals/` somewhere safe.** That folder is the only copy of your factory artwork; if it is lost, restoring a card means reading the artwork off the phone again, which is not possible once the pass no longer has it.
-> - Cards are still functional payment instruments; only the artwork changes. Do not use WaveCard on cards you depend on for same-day travel until you have verified the result.
-> - Keep your pass `pass.json` intact — WaveCard never rewrites it, and restore refuses to do so.
+> **This tool modifies system pass files on your iPhone. Fetch the originals before you start.**
+> - Flashing is a best-effort modification of Apple Wallet internals. It is **not** endorsed by Apple and may conflict with your card issuer's terms.
+> - **An iOS update can overwrite or invalidate a skinned card**, and a pass can occasionally stop rendering entirely. Keep your originals, and if a card breaks, **Restore All** or remove and re-add it from Wallet.
+> - Cards remain functional payment instruments; only the artwork changes. Do not rely on a freshly skinned card for same-day travel until you have verified it.
+> - WaveCard never rewrites `pass.json`, because replacing it invalidates the pass signature on iOS.
 > - **Verified** on iPhone 15 Pro (iPhone16,1) / iOS 18.6.2 with macOS 26.6.2. Reported working across iOS 18–26; iPhone 17 / iOS 27 is not verified yet ([issue #28](https://github.com/WaveWSBS/WaveCard/issues/28)).
-> - Use it on your own device and your own cards. Respect Apple's terms and your card issuer's rules.
+> - Use it on your own device and your own cards, and respect Apple's terms and your issuer's rules.
 
 ---
 
@@ -223,14 +237,16 @@ Nothing is uploaded anywhere; WaveCard talks only to the connected iPhone.
 | Sidebar shows **No Device** | Reconnect the cable, unlock the iPhone, tap **Trust This Computer**. Wi-Fi is intentionally not supported — use USB. |
 | `WaveCard scanner: Unlock the iPhone and trust this Mac, then retry.` | Unlock the phone, accept the trust prompt, retry **Scan Cards**. |
 | Scan runs but nothing is found | You must open the card in Wallet: double-click Side button → Face ID → **tap the card**. Then paste the hash with **Add Card** if you have it. |
-| `Artwork not found on device for [card]` | That pass keeps a vector-only or asset-broker artwork package; the canvas stays empty until you assign a skin. |
+| `Artwork not found on device for [card]` | That pass keeps a vector-only or asset-broker artwork package; fetch it again, or just assign a skin — the canvas stays empty until you do. |
+| `Nothing to Fetch` | Every card already has its original stored on this Mac. |
+| `No original stored for this card yet. Fetch it first.` | Run **Fetch All Originals** (needs the iPhone connected) before restoring or exporting. |
 | Flashed, but Wallet looks unchanged | Force-close Wallet (App Switcher swipe-up) or reboot. The console warns `Cache invalidation warning… reboot may be needed` when it couldn't clear caches. |
+| Buttons greyed out during scanning | Scanning blocks fetch, flash and restore on purpose. Press **Stop Scanning** first. |
 | `Could not extract card files from device` / `expected assets absent from manifest` | Unlock the phone, keep it connected, and retry — an interrupted AirTraffic sync leaves a stale staging tree. |
-| Buttons greyed out during scanning | Scanning blocks backup/restore on purpose. Press **Stop Scanning** first. |
-| `Scanner failed to launch.` | Reinstall/relaunch the app; the bundled helper binary is missing from the bundle. |
+| `Scanner failed to launch.` | Relaunch the app; the bundled helper binary is missing from the bundle. |
 | Gatekeeper blocks launch | Right-click ➔ **Open**, or `sudo xattr -cr /Applications/WaveCard.app`. |
 
-Still stuck? Open an issue with your **iPhone model, iOS version, macOS version, WaveCard commit**, and the **Activity Console error line** — but *never* paste raw device logs or full card hashes.
+Still stuck? Open an issue with your **iPhone model, iOS version, macOS version, WaveCard version**, and the **Activity Console error line** — but *never* paste raw device logs or full card hashes.
 
 ---
 
@@ -245,7 +261,7 @@ cd WaveCard
 `build.sh` runs six stages and prints the result path:
 
 1. `make clean && make all` — universal `device_helper` + `airtraffic_host` (ad-hoc signed)
-2. scaffolds `build/WaveCard.app` (`Info.plist`, bundle id `com.WaveWSBS.wavecard`, version `2.0.0` / build `8`, min macOS `14.0`)
+2. scaffolds `build/WaveCard.app` (`Info.plist`, bundle id `com.WaveWSBS.wavecard`, min macOS `14.0`)
 3. bundles the helpers and `AppIcon.icns` into `Contents/Resources`
 4. compiles `Sources/Swift/*.swift` for `arm64` **and** `x86_64` and `lipo`s them into one universal binary
 5. fixes permissions, strips `xattr`s and ad-hoc signs the bundle
@@ -268,9 +284,10 @@ Output: **`build/WaveCard.dmg`** (and `build/WaveCard.app`).
 ```sh
 xcrun clang -fobjc-arc -framework Foundation tests/test_os_trace.m -o /tmp/test_os_trace && /tmp/test_os_trace
 swiftc -O -parse-as-library tests/test_card_hash_scanner.swift Sources/Swift/CardHashScanner.swift -o /tmp/test_card_hash_scanner && /tmp/test_card_hash_scanner
+swiftc -O -parse-as-library tests/test_card_exporter.swift Sources/Swift/CardExporter.swift -o /tmp/test_card_exporter && /tmp/test_card_exporter
 ```
 
-Covers fragmented/coalesced frames, both length byte orders, disconnects, malformed lengths, truncated records, multiline pass paths and hash validation. Fixtures use synthetic identifiers only.
+Covers fragmented/coalesced log frames, both length byte orders, disconnects, malformed lengths, truncated records, multiline pass paths, hash validation, and export filename sanitising/deduplication. Fixtures use synthetic identifiers only.
 
 ### Project layout
 
@@ -283,22 +300,22 @@ WaveCard/
 │   ├── device_helper.m          # MobileDevice: discovery, pairing, os_trace_relay, AFC staging
 │   ├── airtraffic_host.m        # AirTrafficHost: "airlift" sync host
 │   ├── os_trace.h               # unified-log frame decoder
-│   ├── airlift_target.h         # staging name prefixes + target gate
+│   ├── airlift_target.h         # staging name prefixes + device target gate
 │   └── Swift/
 │       ├── AirliftBridge.swift  # device I/O, batch writes, cache invalidation
 │       ├── AirliftZip.swift     # PKZip + Apple 0x5A53 extras + Books.plist
-│       ├── CardAssetManager.swift   # artwork extraction, originals store, aspect-fill, PDF rendering
-│       ├── CardRestoreManager.swift # rebuilds the asset suite from a stored original
-│       ├── CardExporter.swift       # PNG export naming & writing
+│       ├── CardAssetManager.swift   # extraction, aspect-fill, PDF render, Originals/ store
+│       ├── CardExporter.swift       # PNG export naming/writing
+│       ├── CardRestoreManager.swift # rebuild factory artwork from a stored original
 │       ├── CardHashScanner.swift    # pass-hash extraction & validation
-│       ├── AppViewModel.swift       # app state, fetch / export / flash / restore pipelines
+│       ├── AppViewModel.swift       # app state, fetch / flash / restore pipelines
 │       ├── MainContentView.swift    # NavigationSplitView shell, sheets, alerts
 │       ├── AppSidebarView.swift     # device status + navigation
 │       ├── CardsWorkspaceView.swift # card grid + toolbar
 │       ├── CardItemView.swift       # Apple Wallet canvas, drag & drop
 │       ├── CardInspectorView.swift  # per-card actions
 │       └── LogsView.swift           # Activity Console
-├── tests/                       # os_trace decoder + hash scanner + exporter tests
+├── tests/                       # os_trace decoder, hash scanner, exporter
 ├── docs/wallet-card-detection.md
 └── dmg_assets/                  # DMG background, icon, shipped README
 ```
@@ -314,6 +331,8 @@ WaveCard/
 ## Credits
 
 Developed by [@WaveWSBS](https://github.com/WaveWSBS) & [@Lumid-Off](https://github.com/Lumid-Off).
+
+*WaveCard 1.x was released as AirCard.*
 
 ---
 
