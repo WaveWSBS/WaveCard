@@ -21,7 +21,7 @@ struct CardItemView: View {
         if let memOrig = vm.originalImages[card.id] {
             return memOrig
         }
-        return CardAssetManager.shared.loadOriginal(for: card.id)
+        return CardAssetManager.shared.loadOriginal(for: card.id) ?? vm.walletPreviews[card.id]?.image
     }
 
     private var hasCustomSkin: Bool {
@@ -32,6 +32,10 @@ struct CardItemView: View {
         vm.hasOriginal(for: card.id)
     }
 
+    private var usesWalletPreview: Bool {
+        !hasCustomSkin && !hasStoredOriginal && vm.originalImages[card.id] == nil && vm.walletPreviews[card.id] != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Realistic Card Canvas
@@ -40,8 +44,10 @@ struct CardItemView: View {
                 if let img = displayImage {
                     Image(nsImage: img)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
+                        .accessibilityLabel(usesWalletPreview ? "Wallet preview for \(card.label)" : "Card artwork for \(card.label)")
+                        .aspectRatio(contentMode: usesWalletPreview ? .fit : .fill)
                         .frame(width: 290, height: 183)
+                        .background(Color(NSColor.controlBackgroundColor))
                         .clipped()
                 } else {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -76,6 +82,7 @@ struct CardItemView: View {
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary)
 
+
                             if vm.device?.connected == true {
                                 Button(action: { vm.loadOriginalArtwork(for: card) }) {
                                     Label("Fetch from iPhone", systemImage: "arrow.down.circle")
@@ -83,6 +90,7 @@ struct CardItemView: View {
                                 }
                                 .buttonStyle(.borderless)
                                 .foregroundColor(.accentColor)
+                                .disabled(!vm.canStartDeviceOperation)
                                 .padding(.top, 2)
                             }
                         }
@@ -134,7 +142,7 @@ struct CardItemView: View {
                                     .foregroundColor(.white)
                                     .clipShape(Capsule())
                             } else if displayImage != nil {
-                                Label("Original Pass", systemImage: "applelogo")
+                                Label(usesWalletPreview ? "Wallet Preview" : "Original Pass", systemImage: "applelogo")
                                     .font(.system(size: 9, weight: .semibold))
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 3)
@@ -208,7 +216,7 @@ struct CardItemView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(vm.isExporting)
+                            .disabled(vm.isExporting || !hasStoredOriginal)
                             .help("Export the original artwork as a PNG file")
 
                             if hasStoredOriginal {
@@ -218,7 +226,7 @@ struct CardItemView: View {
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
-                                .disabled(vm.isRestoring || vm.isScanningCards || vm.isFlashing)
+                                .disabled(!vm.canStartDeviceOperation)
                                 .help("Restore factory artwork to this card")
                             }
                         }

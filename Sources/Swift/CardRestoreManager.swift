@@ -14,7 +14,8 @@ public final class CardRestoreManager {
     public func restoreCard(
         udid: String,
         cardHash: String,
-        onLog: @escaping (String) -> Void
+        onLog: @escaping (String) -> Void,
+        onFailure: ((AirliftReadFailure) -> Void)? = nil
     ) async -> Bool {
         guard let originalData = CardAssetManager.shared.originalPNGData(for: cardHash) else {
             onLog("No original stored for card \(cardHash.prefix(8)). Fetch it from the iPhone first.")
@@ -36,7 +37,8 @@ public final class CardRestoreManager {
             udid: udid,
             target: pkpassDir,
             files: files,
-            retries: 3
+            retries: 3,
+            onFailure: onFailure
         )
 
         guard writeOk else {
@@ -45,7 +47,11 @@ public final class CardRestoreManager {
         }
 
         onLog("Invalidating Passbook render cache...")
-        _ = AirliftBridge.shared.invalidateCache(udid: udid, cardHash: cardHash)
+        let cacheOk = AirliftBridge.shared.invalidateCache(udid: udid, cardHash: cardHash, onFailure: onFailure)
+        guard cacheOk else {
+            onLog("Original artwork was written, but cache invalidation failed. Check recovery diagnostics before retrying.")
+            return false
+        }
         onLog("✓ Restore complete for card \(cardHash.prefix(8)).")
         return true
     }

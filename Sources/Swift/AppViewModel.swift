@@ -21,10 +21,13 @@ public final class AppViewModel: ObservableObject {
     @Published public var cards: [CardItem] = []
     @Published public var selectedCardId: String?
     @Published public var originalImages: [String: NSImage] = [:]
+    @Published public var walletPreviews: [String: WalletPreview] = [:]
     @Published public var loadingImages: Set<String> = []
 
     // MARK: - Scanning & Operations State
     @Published public var isScanningCards: Bool = false
+    @Published public private(set) var isStoppingScanner = false
+    @Published public private(set) var isReadingArtwork = false
     @Published public var isFlashing: Bool = false
     @Published public var isFetchingOriginals: Bool = false
     @Published public var isRestoring: Bool = false
@@ -49,26 +52,43 @@ public final class AppViewModel: ObservableObject {
     private var devicePollTask: Task<Void, Never>?
     private var missedDevicePolls = 0
     private var scanProcess: Process?
+    private var observedScanIDs: Set<String> = []
+    private var metadataNameTask: Task<Void, Never>?
+    private var walletPreviewTask: Task<Void, Never>?
+    private let walletMetadataRoot: URL?
+    private var scanWhenIdle = false
     private let cardsStoreURL: URL
+    private let artworkFetcher: @Sendable (String, String) async throws -> Data?
 
-    public init() {
+    public init(storageDirectory: URL? = nil, startPolling: Bool = true, walletMetadataRoot: URL? = nil,
+                artworkFetcher: @escaping @Sendable (String, String) async throws -> Data? = { udid, cardID in
+                    try await CardAssetManager.shared.fetchOriginalArtworkData(udid: udid, cardHash: cardID)
+                }) {
+        self.artworkFetcher = artworkFetcher
+        self.walletMetadataRoot = walletMetadataRoot ?? (storageDirectory == nil
+            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Passes") : nil)
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let wavecardDir = appSupport.appendingPathComponent("WaveCard", isDirectory: true)
+        let wavecardDir = storageDirectory ?? appSupport.appendingPathComponent("WaveCard", isDirectory: true)
         try? FileManager.default.createDirectory(at: wavecardDir, withIntermediateDirectories: true)
         self.cardsStoreURL = wavecardDir.appendingPathComponent("saved_cards.json")
 
         // Collapse the old cache + Backups dumps into one PNG per card before
         // anything reads them.
-        let migration = CardAssetManager.shared.migrateLegacyOriginalsOnce()
-        if migration.migrated > 0 {
-            log("Migrated \(migration.migrated) original(s) into ~/Documents/WaveCard/Originals.", level: .success)
+        if storageDirectory == nil {
+            let migration = CardAssetManager.shared.migrateLegacyOriginalsOnce()
+            if migration.migrated > 0 {
+                log("Migrated \(migration.migrated) original(s) into ~/Documents/WaveCard/Originals.", level: .success)
+            }
         }
 
         loadSavedCards()
-        startDevicePolling()
+        refreshWalletPreviews()
+        if startPolling { startDevicePolling() }
     }
 
     deinit {
+        metadataNameTask?.cancel()
+        walletPreviewTask?.cancel()
         devicePollTask?.cancel()
         scanProcess?.terminate()
     }
@@ -80,7 +100,78 @@ public final class AppViewModel: ObservableObject {
     /// with no device connected the queue cannot drain, so `refreshDevice` would
     /// never notice a phone being plugged in later.
     private var isDeviceBusy: Bool {
-        isProcessingArtworkQueue || isFlashing || isFetchingOriginals || isRestoring
+        // `isFetchingOriginals` is a run flag, not a session: counting it would
+        // stop the poller from seeing a disconnect mid-run, freezing the run.
+        isReadingArtwork || isFlashing || isRestoring || isStoppingScanner || isScanningCards
+    }
+
+    public var canStartScanning: Bool {
+        device?.connected == true && !isDeviceBusy && !isCheckingDevice && artworkFetchQueue.isEmpty && !artworkRecoveryRequired
+    }
+
+    /// App termination does not reliably deinitialize SwiftUI state objects.
+    /// Close our read-only log child explicitly without starting queued work.
+    func stopBackgroundActivityForTermination() {
+        devicePollTask?.cancel()
+        metadataNameTask?.cancel()
+        walletPreviewTask?.cancel()
+        scanWhenIdle = false
+        let process = scanProcess
+        scanProcess = nil
+        isScanningCards = false
+        if process?.isRunning == true { process?.terminate() }
+    }
+
+    public var canRefreshDevice: Bool { !isDeviceBusy && !isCheckingDevice }
+
+    public var canStartDeviceOperation: Bool {
+        device?.connected == true && !isDeviceBusy && !isScanningCards && !isCheckingDevice && !artworkRecoveryRequired
+    }
+
+    private func requireIdleDevice() -> Bool {
+        guard let dev = device, dev.connected else {
+            errorMessage = "No iPhone connected."
+            return false
+        }
+        guard !isDeviceBusy, !isScanningCards, !isCheckingDevice else {
+            errorMessage = "Please finish the current device operation or stop scanning first."
+            return false
+        }
+        if !artworkRecoveryRequired { detectPendingRecovery(udid: dev.udid) }
+        guard !artworkRecoveryRequired else {
+            errorMessage = "Device operations paused. See Logs for retained recovery details."
+            return false
+        }
+        return true
+    }
+
+    private func detectPendingRecovery(udid: String) {
+        let pending = AirliftBridge.shared.pendingRecoveryDirectories(udid: udid)
+        guard !pending.isEmpty else { return }
+        artworkRecoveryRequired = true
+        scanWhenIdle = false
+        artworkFetchQueue.removeAll()
+        for directory in pending { log("Unresolved recovery workspace: \(directory.path)", level: .error) }
+        errorMessage = "A previous device operation has an unresolved recovery snapshot. Reads and writes are paused; see Logs."
+    }
+
+    @discardableResult
+    private func handleDeviceFailures(_ failures: [AirliftReadFailure]) -> Bool {
+        for failure in failures { log(failure.message, level: .error) }
+        guard failures.contains(where: { $0.requiresRecovery }) else { return false }
+        artworkRecoveryRequired = true
+        scanWhenIdle = false
+        artworkFetchQueue.removeAll()
+        advanceFetchAllProgress()
+        errorMessage = "Device operations paused: restoration or cleanup could not be verified. See Logs for retained recovery details."
+        return true
+    }
+
+    private func startScannerWhenIdle() {
+        guard scanWhenIdle, artworkFetchQueue.isEmpty, !isDeviceBusy,
+              !isCheckingDevice, device?.connected == true, !artworkRecoveryRequired else { return }
+        scanWhenIdle = false
+        startScanning()
     }
 
     public func startDevicePolling() {
@@ -101,24 +192,32 @@ public final class AppViewModel: ObservableObject {
     private func refreshDevice(userInitiated: Bool = false) async {
         // Listing starts a lockdown session. Doing that while a read, flash, or
         // scan already holds the phone blocks inside AMDeviceStartSession.
-        if isDeviceBusy && !userInitiated { return }
+        if isDeviceBusy { return }
         guard !isCheckingDevice else { return }
         isCheckingDevice = true
-        defer { isCheckingDevice = false }
+        defer {
+            isCheckingDevice = false
+            processArtworkQueue()
+            startScannerWhenIdle()
+        }
 
         let list = await Task.detached(priority: .utility) {
             AirliftBridge.shared.listDevices()
         }.value
         guard !Task.isCancelled else { return }
-        if isDeviceBusy && !userInitiated { return }
+        if isDeviceBusy { return }
 
         if let first = list.first {
             missedDevicePolls = 0
             if device?.udid != first.udid || device?.connected != first.connected {
                 device = first
                 log("Connected to device: \(first.name ?? "iPhone")", level: .info)
-                fetchAllOriginalArtworks()
-                if !isScanningCards { startScanning() }
+                artworkRecoveryRequired = false
+                detectPendingRecovery(udid: first.udid)
+                scanWhenIdle = !artworkRecoveryRequired
+                loadStoredArtworks()
+                refreshMetadataNames()
+                refreshWalletPreviews()
             }
         } else {
             missedDevicePolls += 1
@@ -131,6 +230,60 @@ public final class AppViewModel: ObservableObject {
     }
 
     // MARK: - Logging
+
+    /// Display images can come from Wallet's local render cache. They are kept
+    /// separate from factory artwork and never authorize a restore or flash.
+    func refreshWalletPreviews() {
+        guard let root = walletMetadataRoot else { return }
+        walletPreviewTask?.cancel()
+        let ids = Set(cards.map(\.id))
+        let product = device?.product ?? ""
+        walletPreviewTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+            let previews = await Task.detached(priority: .utility) {
+                var images = WalletPreviewLoader.load(root: root, cardIDs: ids)
+                let payments = WalletPaymentPreviewLoader.load(walletRoot: root, product: product, cardIDs: ids)
+                images.merge(payments) { local, _ in local }
+                return images
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            let currentIDs = Set(self.cards.map(\.id))
+            self.walletPreviews = previews.filter { currentIDs.contains($0.key) }
+            if !previews.isEmpty {
+                self.log("Loaded \(self.walletPreviews.count) Wallet preview(s) for display.", level: .info)
+            }
+        }
+    }
+
+    /// Names are hints from a matched local Wallet cache, never a phone
+    /// inventory. Only known IDs receive names; user labels remain untouched.
+    func refreshMetadataNames() {
+        guard let root = walletMetadataRoot, let dev = device, dev.connected,
+              let product = dev.product else { return }
+        metadataNameTask?.cancel()
+        let ids = Set(cards.map(\.id))
+        metadataNameTask = Task { [weak self] in
+            // Coalesce bursts of Wallet records without delaying detection.
+            do { try await Task.sleep(nanoseconds: 150_000_000) } catch { return }
+            let names = await Task.detached(priority: .utility) {
+                WalletMetadataCatalog.names(root: root, product: product, confirmedIDs: ids)
+            }.value
+            guard !Task.isCancelled, let self, self.device?.udid == dev.udid,
+                  self.device?.connected == true else { return }
+            var count = 0
+            for index in self.cards.indices {
+                let id = self.cards[index].id
+                guard self.cards[index].label == "Card \(id.prefix(8))",
+                      let name = names[id], !name.isEmpty else { continue }
+                self.cards[index].label = name
+                count += 1
+            }
+            if count > 0 {
+                self.saveCards()
+                self.log("Named \(count) known card(s) using local Wallet metadata.", level: .info)
+            }
+        }
+    }
 
     public func log(_ message: String, level: LogLevel = .info) {
         let entry = LogEntry(level: level, message: message)
@@ -215,14 +368,18 @@ public final class AppViewModel: ObservableObject {
         selectedCardId = cleanId
         saveCards()
         log("Added card manually: \(cleanId)", level: .info)
-        loadOriginalArtwork(for: newCard)
+        refreshWalletPreviews()
+        refreshMetadataNames()
     }
 
     func deleteCard(id: String) {
         cards.removeAll(where: { $0.id == id })
         originalImages.removeValue(forKey: id)
+        walletPreviews.removeValue(forKey: id)
         artworkFetchQueue.removeAll(where: { $0 == id })
-        loadingImages.remove(id)
+        // An active read still owns the device even if its card is removed.
+        fetchAllTargets.remove(id)
+        advanceFetchAllProgress()
         CardAssetManager.shared.clearCachedCustom(cardHash: id)
         if selectedCardId == id {
             selectedCardId = cards.first?.id
@@ -234,33 +391,48 @@ public final class AppViewModel: ObservableObject {
     // MARK: - Native Artwork Loading (Serial Queue to prevent AirTraffic collisions)
 
     private var artworkFetchQueue: [String] = []
-    private var isProcessingArtworkQueue = false
+    private var artworkRecoveryRequired = false
     /// The set an explicit "Fetch All Originals" run was asked to cover.
     private var fetchAllTargets: Set<String> = []
 
-    func fetchAllOriginalArtworks() {
-        guard let dev = device, dev.connected else { return }
+    /// Connecting starts detection promptly; only explicit fetch actions may
+    /// read device artwork. Unknown pass formats must not delay the scanner.
+    private func loadStoredArtworks() {
         for card in cards {
-            if originalImages[card.id] == nil {
-                enqueueArtworkFetch(for: card.id)
+            if let stored = CardAssetManager.shared.loadOriginal(for: card.id) {
+                originalImages[card.id] = stored
             }
         }
-        // Entries queued while no device was attached are still waiting here.
-        processArtworkQueue()
     }
 
     /// Toolbar action: pull the factory artwork of every card that has none
     /// stored yet, so each one becomes independently restorable and exportable.
     func fetchAllOriginals() {
+        guard requireIdleDevice() else { return }
+        guard !artworkRecoveryRequired else {
+            errorMessage = "Artwork reads paused. See Logs for the retained recovery snapshot."
+            return
+        }
         guard let dev = device, dev.connected else {
             errorMessage = "No iPhone connected."
             return
         }
 
-        let pending = cards.filter { !CardAssetManager.shared.hasOriginal(for: $0.id) }
+        let missing = cards.filter { !CardAssetManager.shared.hasOriginal(for: $0.id) }
+        // Tickets, IDs and other non-payment passes never carry bank artwork;
+        // each probe would only spend several AirTraffic syncs on the phone.
+        let nonPayment = walletMetadataRoot.map {
+            WalletMetadataCatalog.nonPaymentPassIDs(root: $0, ids: Set(missing.map(\.id)))
+        } ?? []
+        let pending = missing.filter { !nonPayment.contains($0.id) }
+        if !nonPayment.isEmpty {
+            log("Skipping \(nonPayment.count) non-payment pass(es) (tickets, IDs, etc.): they have no bank artwork.", level: .info)
+        }
         guard !pending.isEmpty else {
             successAlertTitle = "Nothing to Fetch"
-            successAlertMessage = "All \(cards.count) card(s) already have their original artwork stored on this Mac."
+            successAlertMessage = nonPayment.isEmpty
+                ? "All \(cards.count) card(s) already have their original artwork stored on this Mac."
+                : "Every payment card already has its original artwork stored on this Mac. \(nonPayment.count) non-payment pass(es) (tickets, IDs, etc.) were skipped because they have no bank artwork."
             showSuccessAlert = true
             return
         }
@@ -271,7 +443,7 @@ public final class AppViewModel: ObservableObject {
         statusText = "Fetching \(pending.count) original(s) from iPhone..."
         log("Fetching \(pending.count) missing original(s) from iPhone...", level: .info)
 
-        for card in pending {
+        for card in pending where !artworkFetchQueue.contains(card.id) && !loadingImages.contains(card.id) {
             artworkFetchQueue.append(card.id)
         }
         processArtworkQueue()
@@ -279,6 +451,11 @@ public final class AppViewModel: ObservableObject {
 
     func loadOriginalArtwork(for card: CardItem) {
         guard CardHashScanner.isValid(card.id) else { return }
+        if let stored = CardAssetManager.shared.loadOriginal(for: card.id) {
+            originalImages[card.id] = stored
+            return
+        }
+        guard requireIdleDevice() else { return }
         enqueueArtworkFetch(for: card.id)
     }
 
@@ -288,7 +465,11 @@ public final class AppViewModel: ObservableObject {
             originalImages[cardId] = stored
             return
         }
-        guard !artworkFetchQueue.contains(cardId) else {
+        guard !artworkRecoveryRequired else {
+            errorMessage = "Artwork reads paused because restoration or cleanup could not be verified. See Logs for the retained recovery snapshot."
+            return
+        }
+        guard !loadingImages.contains(cardId), !artworkFetchQueue.contains(cardId) else {
             processArtworkQueue()
             return
         }
@@ -297,58 +478,90 @@ public final class AppViewModel: ObservableObject {
     }
 
     private func processArtworkQueue() {
-        guard !isProcessingArtworkQueue else { return }
+        guard !isDeviceBusy, !isCheckingDevice, !isScanningCards, !artworkRecoveryRequired else { return }
         guard let dev = device, dev.connected else { return }
         guard !artworkFetchQueue.isEmpty else { return }
 
         let cardId = artworkFetchQueue.removeFirst()
         loadingImages.insert(cardId)
-        isProcessingArtworkQueue = true
+        isReadingArtwork = true
 
         let udid = dev.udid
         let label = cards.first(where: { $0.id == cardId })?.label ?? cardId
 
         log("Fetching card background from iPhone for [\(label)]...", level: .info)
 
+        let fetchArtwork = artworkFetcher
         Task.detached(priority: .userInitiated) {
-            let data = await CardAssetManager.shared.fetchOriginalArtworkData(udid: udid, cardHash: cardId)
+            let data: Data?
+            var failure: String?
+            var recoveryRequired = false
+            var unresponsive = false
+            do {
+                data = try await fetchArtwork(udid, cardId)
+            } catch {
+                data = nil
+                failure = error.localizedDescription
+                recoveryRequired = (error as? AirliftReadFailure)?.requiresRecovery == true
+                unresponsive = (error as? AirliftReadFailure)?.deviceUnresponsive == true
+            }
+            let fetchFailure = failure
+            let pauseForRecovery = recoveryRequired
+            let stopForUnresponsiveDevice = unresponsive
             // Small pause between AirTraffic operations so iOS finishes session
             try? await Task.sleep(nanoseconds: 400_000_000)
 
             await MainActor.run {
                 self.loadingImages.remove(cardId)
-                self.isProcessingArtworkQueue = false
+                self.isReadingArtwork = false
 
-                if let data = data, let image = NSImage(data: data) {
+                if !self.cards.contains(where: { $0.id == cardId }) {
+                    self.log("Artwork read finished for a card removed from the library.", level: .info)
+                } else if let data = data, let image = NSImage(data: data) {
                     self.originalImages[cardId] = image
                     self.log("✓ Successfully loaded artwork for [\(label)]", level: .success)
                 } else {
-                    self.log("Artwork not found on device for [\(label)] (or pass format is vector)", level: .warning)
+                    self.log("Artwork fetch for [\(label)] ended: \(fetchFailure ?? "No supported background was returned; pass type is unknown.")", level: .warning)
                 }
 
+                if pauseForRecovery {
+                    self.artworkRecoveryRequired = true
+                    self.artworkFetchQueue.removeAll()
+                    self.errorMessage = "Artwork reads paused: restoration or cleanup could not be verified. See Logs for recovery details."
+                } else if stopForUnresponsiveDevice {
+                    // Every remaining read would wait out the same handshake.
+                    let dropped = self.artworkFetchQueue.count
+                    self.artworkFetchQueue.removeAll()
+                    self.log("iPhone did not respond to the AirTraffic sync; stopped \(dropped) remaining artwork read(s).", level: .error)
+                    self.errorMessage = "Your iPhone's sync service is not responding, so artwork reads were stopped. Unlock the iPhone, restart it, reconnect, and try again."
+                }
                 self.advanceFetchAllProgress()
 
                 // Process next in serial queue
                 self.processArtworkQueue()
+                self.startScannerWhenIdle()
             }
         }
     }
 
-    /// Advances the "Fetch All Originals" progress bar. Counts originals that
-    /// actually landed rather than queue length, because other callers share the
-    /// queue. Closes out once the queue drains so the banner never sticks.
+    /// Advances the "Fetch All Originals" progress bar. A target counts as done
+    /// once it has been attempted, whether or not artwork was found.
+    /// Failed reads must also finish the run.
     private func advanceFetchAllProgress() {
-        guard isFetchingOriginals, !fetchAllTargets.isEmpty else { return }
+        guard isFetchingOriginals else { return }
 
-        let done = fetchAllTargets.filter { CardAssetManager.shared.hasOriginal(for: $0) }.count
-        progress = min(1.0, Double(done) / Double(fetchAllTargets.count))
+        let pending = fetchAllTargets.filter { artworkFetchQueue.contains($0) || loadingImages.contains($0) }.count
+        let done = fetchAllTargets.count - pending
+        progress = fetchAllTargets.isEmpty ? 1.0 : min(1.0, Double(done) / Double(fetchAllTargets.count))
 
-        guard artworkFetchQueue.isEmpty, !isProcessingArtworkQueue, done >= fetchAllTargets.count else { return }
+        guard pending == 0 else { return }
+        let attempted = fetchAllTargets
         isFetchingOriginals = false
         fetchAllTargets = []
         progress = 1.0
 
-        let stillMissing = cards.filter { !CardAssetManager.shared.hasOriginal(for: $0.id) }
+        // Skipped non-payment passes were never targets and are not failures.
+        let stillMissing = cards.filter { attempted.contains($0.id) && !CardAssetManager.shared.hasOriginal(for: $0.id) }
         statusText = stillMissing.isEmpty
             ? "Fetched all originals."
             : "Fetched with \(stillMissing.count) still missing."
@@ -356,7 +569,7 @@ public final class AppViewModel: ObservableObject {
 
         if !stillMissing.isEmpty {
             successAlertTitle = "Fetch Complete"
-            successAlertMessage = "These cards have no bank artwork to extract:\n\n"
+            successAlertMessage = "Original artwork could not be fetched for these passes. See Logs for read failures or unsupported backgrounds:\n\n"
                 + stillMissing.map { "• \($0.label) (\($0.id.prefix(8)))" }.joined(separator: "\n")
             showSuccessAlert = true
         }
@@ -434,6 +647,10 @@ public final class AppViewModel: ObservableObject {
     }
 
     func startScanning() {
+        guard canStartScanning else {
+            errorMessage = "Please finish the current device operation before scanning."
+            return
+        }
         guard let dev = device, dev.connected else {
             errorMessage = "Please connect your iPhone via USB first."
             return
@@ -452,13 +669,18 @@ public final class AppViewModel: ObservableObject {
         let proc = Process()
         proc.executableURL = helper
         proc.arguments = ["syslog", dev.udid]
+        var environment = ProcessInfo.processInfo.environment
+        environment["WAVECARD_SYSLOG_JSON"] = "1"
+        proc.environment = environment
         proc.standardOutput = pipe
         proc.standardError = pipe
+        observedScanIDs.removeAll()
         self.scanProcess = proc
 
         do {
             try proc.run()
         } catch {
+            scanProcess = nil
             isScanningCards = false
             statusText = "Scanner failed to launch."
             log("Syslog process failed: \(error.localizedDescription)", level: .error)
@@ -470,7 +692,10 @@ public final class AppViewModel: ObservableObject {
             var buffer = Data()
 
             while true {
-                let chunk = (try? handle.read(upToCount: 65536)) ?? Data()
+                // read(upToCount:) can wait to fill the requested size on a
+                // pipe. The filtered Wallet stream may stay below that size
+                // for minutes; consume bytes as soon as the helper emits them.
+                let chunk = handle.availableData
                 if chunk.isEmpty {
                     if buffer.isEmpty { break }
                     buffer.append(0x0A)
@@ -483,27 +708,46 @@ public final class AppViewModel: ObservableObject {
                     buffer.removeSubrange(buffer.startIndex..<newlineRange.upperBound)
 
                     guard let line = String(data: lineData, encoding: .utf8) else { continue }
-                    let lower = line.lowercased()
-
-                    let isWallet = lower.contains("passd") || lower.contains("passbook") ||
-                                   lower.contains("passkit") || lower.contains("stockholm") ||
-                                   lower.contains("nanopassd") || lower.contains("wallet") ||
-                                   lower.contains("passids") || lower.contains("/cards/")
-
-                    guard isWallet || CardHashScanner.quotedPassID(in: line) != nil else { continue }
-
-                    let detected = CardHashScanner.hashes(in: line)
+                    if line.hasPrefix("WaveCard scanner:") {
+                        await MainActor.run {
+                            guard self.scanProcess === proc else { return }
+                            self.log(line, level: line.contains("Connected") ? .info : .warning)
+                        }
+                        continue
+                    }
+                    // Each wire line contains one complete device record. JSON
+                    // preserves NFC lists and resource paths on continuation lines.
+                    let record: String
+                    if let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                       let completeRecord = object["line"] as? String {
+                        record = completeRecord
+                    } else {
+                        record = line // Compatibility with older helper binaries.
+                    }
+                    let detected = CardHashScanner.detectedPassIDs(inRecord: record)
                     guard !detected.isEmpty else { continue }
 
                     await MainActor.run {
-                        for candidate in detected where !self.cards.contains(where: { $0.id == candidate }) {
+                        guard self.scanProcess === proc else { return }
+                        var discoveredNewCard = false
+                        for candidate in detected where self.observedScanIDs.insert(candidate).inserted {
+                            if let saved = self.cards.first(where: { $0.id == candidate }) {
+                                self.log("Matched saved card: \(saved.label) (\(candidate.prefix(8))…)", level: .success)
+                                continue
+                            }
                             let newCard = CardItem(id: candidate, isSelected: true)
                             self.cards.append(newCard)
+                            discoveredNewCard = true
                             self.saveCards()
                             self.log("✓ Detected card: \(candidate)", level: .success)
                             NSSound(named: "Glass")?.play()
                             // Artwork reading skipped during scan for safety
                         }
+                        if discoveredNewCard {
+                            self.refreshMetadataNames()
+                            self.refreshWalletPreviews()
+                        }
+
                     }
                 }
                 if chunk.isEmpty { break }
@@ -521,17 +765,31 @@ public final class AppViewModel: ObservableObject {
     }
 
     func stopScanning() {
+        scanWhenIdle = false
         let proc = scanProcess
         scanProcess = nil
-        if let proc, proc.isRunning { proc.terminate() }
         isScanningCards = false
         statusText = "Ready"
         log("Scanner stopped.", level: .info)
+        guard let proc, proc.isRunning else {
+            processArtworkQueue()
+            return
+        }
+        isStoppingScanner = true
+        proc.terminate()
+        Task.detached {
+            proc.waitUntilExit()
+            await MainActor.run {
+                self.isStoppingScanner = false
+                self.processArtworkQueue()
+            }
+        }
     }
 
     // MARK: - Flash Skins (Pure Swift Native)
 
     func flashSelectedCards() {
+        guard requireIdleDevice() else { return }
         guard let dev = device, dev.connected else {
             errorMessage = "No iPhone connected."
             return
@@ -588,30 +846,39 @@ public final class AppViewModel: ObservableObject {
                     self.log("  Writing 3 artwork assets via fast batch...")
                 }
 
+                var operationFailures: [AirliftReadFailure] = []
                 let writeOk = AirliftBridge.shared.writeFilesBatch(
                     udid: udid,
                     target: pkpassDir,
                     files: filesToWrite,
-                    retries: 3
+                    retries: 3,
+                    onFailure: { operationFailures.append($0) }
                 )
 
                 if !writeOk {
                     anyFailed = true
+                    let failures = operationFailures
                     await MainActor.run {
-                        self.log("  ✗ Failed writing assets to \(card.label)", level: .error)
+                        self.log("  ✗ Failed writing assets to \(card.label); remaining cards were not attempted.", level: .error)
+                        self.handleDeviceFailures(failures)
                     }
-                    continue
+                    break
                 }
 
                 await MainActor.run {
                     self.log("  Invalidating system render caches (.cache / .pkcache)...")
                 }
 
-                let cacheOk = AirliftBridge.shared.invalidateCache(udid: udid, cardHash: card.id)
+                let cacheOk = AirliftBridge.shared.invalidateCache(udid: udid, cardHash: card.id,
+                    onFailure: { operationFailures.append($0) })
                 if !cacheOk {
+                    anyFailed = true
+                    let failures = operationFailures
                     await MainActor.run {
-                        self.log("  ⚠ Cache invalidation warning for \(card.label). Pass was written but reboot may be needed.", level: .warning)
+                        self.log("  ⚠ Artwork was written for \(card.label), but cache invalidation failed. Remaining cards were not attempted.", level: .warning)
+                        self.handleDeviceFailures(failures)
                     }
+                    break
                 } else {
                     await MainActor.run {
                         self.log("  ✓ Successfully updated \(card.label)!", level: .success)
@@ -622,10 +889,14 @@ public final class AppViewModel: ObservableObject {
             let failed = anyFailed
             await MainActor.run {
                 self.isFlashing = false
+                self.processArtworkQueue()
+                self.startScannerWhenIdle()
                 self.progress = 1.0
                 if failed {
                     self.statusText = "Flash completed with warnings. Check logs."
-                    self.errorMessage = "One or more cards could not be flashed completely."
+                    if !self.artworkRecoveryRequired {
+                        self.errorMessage = "Flashing stopped after a failure. See Logs for the affected card and stage."
+                    }
                 } else {
                     self.statusText = "Flash complete!"
                     self.successAlertTitle = "Skins Applied!"
@@ -762,6 +1033,10 @@ public final class AppViewModel: ObservableObject {
             return stored
         }
         guard device?.connected == true else { return nil }
+        guard !isScanningCards, !isFlashing, !isRestoring, !isStoppingScanner else {
+            log("Original artwork is not stored yet; finish the current device operation before exporting.", level: .warning)
+            return nil
+        }
 
         enqueueArtworkFetch(for: cardId)
 
@@ -781,6 +1056,7 @@ public final class AppViewModel: ObservableObject {
     // MARK: Restore
 
     func restoreCard(cardHash: String) {
+        guard requireIdleDevice() else { return }
         guard let dev = device, dev.connected else {
             errorMessage = "No iPhone connected."
             return
@@ -797,17 +1073,25 @@ public final class AppViewModel: ObservableObject {
         let label = cards.first(where: { $0.id == cardHash })?.label ?? String(cardHash.prefix(8))
 
         Task.detached(priority: .userInitiated) {
+            var operationFailures: [AirliftReadFailure] = []
             let ok = await CardRestoreManager.shared.restoreCard(
                 udid: udid,
                 cardHash: cardHash,
-                onLog: { msg in Task { @MainActor in self.log(msg, level: .info) } }
+                onLog: { msg in Task { @MainActor in self.log(msg, level: .info) } },
+                onFailure: { operationFailures.append($0) }
             )
 
+            let failures = operationFailures
             await MainActor.run {
                 self.isRestoring = false
+                self.handleDeviceFailures(failures)
+                self.processArtworkQueue()
+                self.startScannerWhenIdle()
                 guard ok else {
                     self.statusText = "Restoration failed."
-                    self.errorMessage = "Failed to write original artwork for '\(label)' to the device."
+                    if !self.artworkRecoveryRequired {
+                        self.errorMessage = "Restoration of '\(label)' did not complete. See Logs for the failed stage."
+                    }
                     return
                 }
 
@@ -826,6 +1110,7 @@ public final class AppViewModel: ObservableObject {
     /// Rebuilds every card that has an original stored. Cards without one are
     /// skipped rather than failing the run.
     func restoreAllCards() {
+        guard requireIdleDevice() else { return }
         guard let dev = device, dev.connected else {
             errorMessage = "No iPhone connected."
             return
@@ -855,23 +1140,37 @@ public final class AppViewModel: ObservableObject {
                     self.progress = Double(idx) / Double(restorable.count)
                 }
 
+                var operationFailures: [AirliftReadFailure] = []
                 let ok = await CardRestoreManager.shared.restoreCard(
                     udid: udid,
                     cardHash: card.id,
-                    onLog: { msg in Task { @MainActor in self.log(msg, level: .info) } }
+                    onLog: { msg in Task { @MainActor in self.log(msg, level: .info) } },
+                    onFailure: { operationFailures.append($0) }
                 )
                 if ok { restored += 1 }
+                else {
+                    let failures = operationFailures
+                    await MainActor.run {
+                        self.handleDeviceFailures(failures)
+                        self.log("Bulk restore stopped after a failure; remaining cards were not attempted.", level: .error)
+                    }
+                    break
+                }
             }
 
             let finalCount = restored
             await MainActor.run {
                 self.isRestoring = false
+                self.processArtworkQueue()
+                self.startScannerWhenIdle()
                 self.progress = 1.0
                 self.statusText = "Restore complete: \(finalCount)/\(restorable.count) cards."
-                self.successAlertTitle = "Cards Restored"
-                self.successAlertMessage = "Successfully restored \(finalCount) card(s) to factory artwork on your iPhone!\n\nPlease force close the Wallet app on your iPhone (swipe up in app switcher) and reopen it."
-                self.showSuccessAlert = true
-                self.log("✓ Bulk restore finished (\(finalCount)/\(restorable.count) cards).", level: .success)
+                let complete = finalCount == restorable.count
+                self.successAlertTitle = complete ? "Cards Restored" : "Restore Incomplete"
+                self.successAlertMessage = "Restored \(finalCount)/\(restorable.count) card(s)."
+                    + (complete ? " Force-close Wallet and reopen it to view the artwork." : " Remaining cards were not attempted. See Logs for failure details.")
+                if !self.artworkRecoveryRequired { self.showSuccessAlert = true }
+                self.log("Bulk restore finished (\(finalCount)/\(restorable.count) cards).", level: complete ? .success : .warning)
             }
         }
     }

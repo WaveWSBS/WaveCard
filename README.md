@@ -12,7 +12,7 @@
 WaveCard talks straight to iPhone over USB using Apple's own `MobileDevice` and `AirTrafficHost` frameworks. It **sniffs** card passes out of the unified device log, **reads** the real factory artwork out of each `.pkpass` on the device, and **writes** your replacement artwork back — then clears Wallet's render cache so the new design actually shows up.
 
 - 🖥️ **macOS app, no runtime dependencies** — no Python, no Homebrew, no `libimobiledevice`, no Xcode required to *use* it.
-- 🔍 **Real-time card detection** — click **Scan Cards**, then double-click the Side button and pay. Cards appear by themselves.
+- 🔍 **Real-time card detection** — click **Scan Cards**, then double-click the Side button and open a card in Wallet. Cards appear by themselves.
 - 🖼️ **True factory artwork extraction** — pulls the real `cardBackgroundCombined` art off the phone (PNG, vector PDF, or Apple's asset-broker sidecar), not a screenshot, and keeps a copy on your Mac.
 - 💾 **Originals on disk + one-click restore** — every factory card face is saved as a PNG in `~/Documents/WaveCard/Originals/` and can be rebuilt onto the phone at any time, individually or all at once.
 - 📤 **Export anywhere** — pull the original artwork out as PNG files for archival, design reference, or anything else.
@@ -108,15 +108,21 @@ On the iPhone you must actually **use** the card so the lookup happens:
 
 > **Double-click iPhone Side button → Pass Face ID → Tap your card**
 
-Each detected hash is validated (length, character set, blocklist of framework names) before being added, and the console prints `✓ Detected card: <hash>`.
+Each detected hash is validated (length, character set, blocklist of framework names) before being added, and the console prints `✓ Detected card: <hash>`. Existing cards produce `Matched saved card` once per scan. The scanner preserves complete multiline records and recognizes Wallet paths, Dashboard messages and NFC pass-ID lists. An NFC applet identifier is not a pass hash; global NFC lists also do not indicate which card is currently selected.
 
 No luck? **Add Card** lets you paste a hash manually — handy if you already have one from a previous session or a log.
 
+Known cards with a default `Card …` label can receive names from this Mac's Wallet metadata. Payment names require a unique device-model and known-ID match. Your own labels are preserved, and cached cards are never added to the library just because they exist on the Mac.
+
 ### 3. Fetch the factory artwork
 
-New cards show `Reading artwork from iPhone...`. **Fetch All Originals** in the toolbar (or **Fetch from iPhone** on a single card) reads, in order, `cardBackgroundCombined@2x.png`, `@3x.png`, `.png`, then falls back to `cardBackgroundCombined.pdf` and finally Apple's asset-broker `.urls` sidecar for cards that keep no local PNG. The result is normalized to a PNG and saved to `~/Documents/WaveCard/Originals/<hash>.png`.
+New cards are detected without starting an artwork read. After you explicitly request artwork, the card shows `Reading artwork from iPhone...`. **Fetch All Originals** in the toolbar (or **Fetch from iPhone** on a single card) reads, in order, `cardBackgroundCombined@2x.png`, `@3x.png`, `.png`, then falls back to `cardBackgroundCombined.pdf` and finally Apple's asset-broker `.urls` sidecar for cards that keep no local PNG. The result is normalized to a PNG and saved to `~/Documents/WaveCard/Originals/<hash>.png`. **Fetch All Originals** skips passes the Mac already knows are non-payment (event tickets, boarding passes, generic passes such as IDs), because they never carry bank artwork.
 
-Wallet's own composited `FrontFace` bitmap is explicitly rejected, so what you store really is the bank's art. Once stored, the original is never re-read from the phone.
+Factory backups reject Wallet's composited `FrontFace` bitmap. Once a factory original is stored, it is never re-read from the phone.
+
+Card display also loads **Wallet Preview** images separately: supported local ticket assets (`strip.png`, `logo.png`, background color), ordinary Wallet cache images, and payment thumbnails matched by the exact pass manifest hash. Previews load without an AirTraffic artwork read, including when the phone is disconnected. They do not become factory backups and cannot be used to restore a card. Tickets using a different layout can therefore show their real artwork even when they have no `cardBackgroundCombined` file.
+
+Tickets and identity documents may use a different artwork layout. Identifying a pass does not establish that it has a supported `cardBackgroundCombined` asset. A transport timeout is reported as a failed read, rather than cached as “no artwork.” If a read is interrupted after file movement may have started, WaveCard retains recovery files and blocks further device changes until recovery is resolved.
 
 ### 4. Assign a custom skin
 
@@ -236,12 +242,15 @@ Originals live in `Documents` on purpose — the system cache can be purged, you
 | Sidebar shows **No Device** | Reconnect the cable, unlock the iPhone, tap **Trust This Computer**. Wi-Fi is intentionally not supported — use USB. |
 | `WaveCard scanner: Unlock the iPhone and trust this Mac, then retry.` | Unlock the phone, accept the trust prompt, retry **Scan Cards**. |
 | Scan runs but nothing is found | You must open the card in Wallet: double-click Side button → Face ID → **tap the card**. Then paste the hash with **Add Card** if you have it. |
-| `Artwork not found on device for [card]` | That pass keeps a vector-only or asset-broker artwork package; fetch it again, or just assign a skin — the canvas stays empty until you do. |
+| `Artwork fetch for [card] ended` | Read the error stage in Logs. A failed read does not identify the pass type or prove that artwork is absent. |
+| `timeout` at `wait-ReadyForSync` / `Your iPhone's sync service is not responding` | The phone did not finish the sync handshake within the bounded handshake deadline. The resource manifest has not been reached, so this does not establish whether the requested file exists. WaveCard stops the remaining reads instead of timing out card after card. **Restart the iPhone**, unlock it, reconnect and retry — a stuck sync service is the usual cause, and reads that hung for minutes complete in seconds afterwards. |
+| `Device operations paused` / `Artwork reads paused` | Restoration or cleanup could not be verified. Recovery snapshots are retained under `~/Library/Application Support/WaveCard/Recovery`, including across relaunches. Logs identify the workspace; resolve the failure before more reads or writes. |
+| Connected but some artwork stays blank | Connection starts ID scanning and loads backups already stored on this Mac. Stop scanning, then use **Fetch All Originals** or **Fetch from iPhone** to request missing artwork explicitly. |
 | `Nothing to Fetch` | Every card already has its original stored on this Mac. |
 | `No original stored for this card yet. Fetch it first.` | Run **Fetch All Originals** (needs the iPhone connected) before restoring or exporting. |
 | Flashed, but Wallet looks unchanged | Force-close Wallet (App Switcher swipe-up) or reboot. The console warns `Cache invalidation warning… reboot may be needed` when it couldn't clear caches. |
 | Buttons greyed out during scanning | Scanning blocks fetch, flash and restore on purpose. Press **Stop Scanning** first. |
-| `Could not extract card files from device` / `expected assets absent from manifest` | Unlock the phone, keep it connected, and retry — an interrupted AirTraffic sync leaves a stale staging tree. |
+| `expected assets absent from manifest` | The completed sync manifest did not include the requested resources. This can reflect an unavailable filename or a sync-state problem; it does not classify the pass as a ticket or ID. |
 | `Scanner failed to launch.` | Relaunch the app; the bundled helper binary is missing from the bundle. |
 | Gatekeeper blocks launch | Right-click ➔ **Open**, or `sudo xattr -cr /Applications/WaveCard.app`. |
 
@@ -284,6 +293,12 @@ Output: **`build/WaveCard.dmg`** (and `build/WaveCard.app`).
 xcrun clang -fobjc-arc -framework Foundation tests/test_os_trace.m -o /tmp/test_os_trace && /tmp/test_os_trace
 swiftc -O -parse-as-library tests/test_card_hash_scanner.swift Sources/Swift/CardHashScanner.swift -o /tmp/test_card_hash_scanner && /tmp/test_card_hash_scanner
 swiftc -O -parse-as-library tests/test_card_exporter.swift Sources/Swift/CardExporter.swift -o /tmp/test_card_exporter && /tmp/test_card_exporter
+
+# Mock transport, operation-state and recovery checks: no iPhone needed.
+xcrun clang -fobjc-arc -framework Foundation -framework CoreFoundation tests/test_airtraffic_protocol.m -o /tmp/test_airtraffic_protocol && /tmp/test_airtraffic_protocol
+swiftc -parse-as-library tests/test_artwork_failures.swift Sources/Swift/*.swift -o /tmp/test_artwork_failures && /tmp/test_artwork_failures
+swiftc -parse-as-library tests/test_bridge_recovery.swift Sources/Swift/*.swift -o /tmp/test_bridge_recovery && /tmp/test_bridge_recovery
+swiftc -parse-as-library tests/test_app_view_model.swift Sources/Swift/*.swift -o /tmp/test_app_view_model && /tmp/test_app_view_model
 ```
 
 Covers fragmented/coalesced log frames, both length byte orders, disconnects, malformed lengths, truncated records, multiline pass paths, hash validation, and export filename sanitising/deduplication. Fixtures use synthetic identifiers only.

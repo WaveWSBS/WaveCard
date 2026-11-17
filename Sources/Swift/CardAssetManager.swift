@@ -20,14 +20,15 @@ public final class CardAssetManager {
     /// Custom skins are a throwaway render cache and may live in Library/Caches.
     private let customCacheDirectory: URL
     private let imageCache = NSCache<NSString, NSImage>()
+    private let originalValidationCache = NSCache<NSString, NSNumber>()
 
-    private init() {
+    init(originalsDirectory: URL? = nil, customCacheDirectory: URL? = nil) {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        self.originalsDirectory = docs.appendingPathComponent("WaveCard/Originals", isDirectory: true)
+        self.originalsDirectory = originalsDirectory ?? docs.appendingPathComponent("WaveCard/Originals", isDirectory: true)
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        self.customCacheDirectory = caches.appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
-        try? FileManager.default.createDirectory(at: originalsDirectory, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: customCacheDirectory, withIntermediateDirectories: true)
+        self.customCacheDirectory = customCacheDirectory ?? caches.appendingPathComponent("com.WaveWSBS.wavecard/cards", isDirectory: true)
+        try? FileManager.default.createDirectory(at: self.originalsDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: self.customCacheDirectory, withIntermediateDirectories: true)
     }
 
     // MARK: - CoreGraphics Aspect-Fill Scaling & PNG Export
@@ -128,7 +129,7 @@ public final class CardAssetManager {
 
     /// Extracts original card background data from connected device via Airlift.
     /// Always yields PNG bytes and always leaves a copy in Originals/.
-    public func fetchOriginalArtworkData(udid: String, cardHash: String) async -> Data? {
+    public func fetchOriginalArtworkData(udid: String, cardHash: String) async throws -> Data? {
         // An original already on disk is the backup; never re-read the phone.
         if let stored = originalPNGData(for: cardHash) {
             return stored
@@ -146,16 +147,18 @@ public final class CardAssetManager {
         ]
 
         for leaf in candidates {
-            guard let data = AirliftBridge.shared.readFile(udid: udid, target: pkpassDir, leaf: leaf, retries: 1),
+            guard let data = try readArtworkFile(udid: udid, target: pkpassDir, leaf: leaf),
                   Self.isBankArtwork(data) else {
                 continue
             }
-            saveOriginal(cardHash: cardHash, data: data)
+            guard saveOriginal(cardHash: cardHash, data: data) else {
+                throw AirliftReadFailure(message: "Original artwork was read but could not be saved on this Mac.")
+            }
             return data
         }
 
         // Fallback: Check if PDF exists and render page 1
-        if let pdfData = AirliftBridge.shared.readFile(udid: udid, target: pkpassDir, leaf: "cardBackgroundCombined.pdf", retries: 1),
+        if let pdfData = try readArtworkFile(udid: udid, target: pkpassDir, leaf: "cardBackgroundCombined.pdf"),
            pdfData.starts(with: Data("%PDF".utf8)),
            let provider = CGDataProvider(data: pdfData as CFData),
            let pdfDoc = CGPDFDocument(provider),
@@ -166,7 +169,9 @@ public final class CardAssetManager {
             if let context = CGContext(data: nil, width: Int(rect.width), height: Int(rect.height), bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) {
                 context.drawPDFPage(page)
                 if let cgImage = context.makeImage(), let png = cgImageToPNG(cgImage: cgImage) {
-                    saveOriginal(cardHash: cardHash, data: png)
+                    guard saveOriginal(cardHash: cardHash, data: png) else {
+                        throw AirliftReadFailure(message: "Original artwork was read but could not be saved on this Mac.")
+                    }
                     return png
                 }
             }
@@ -174,8 +179,10 @@ public final class CardAssetManager {
 
         // Shell payment passes keep no PNG in the pkpass. Artwork lives at
         // Apple's asset broker, listed in a .urls sidecar.
-        if let data = await fetchArtworkFromURLSidecar(udid: udid, pkpassDir: pkpassDir) {
-            saveOriginal(cardHash: cardHash, data: data)
+        if let data = try await fetchArtworkFromURLSidecar(udid: udid, pkpassDir: pkpassDir) {
+            guard saveOriginal(cardHash: cardHash, data: data) else {
+                throw AirliftReadFailure(message: "Original artwork was read but could not be saved on this Mac.")
+            }
             return data
         }
 
@@ -186,14 +193,14 @@ public final class CardAssetManager {
     }
 
     /// Reads `cardBackgroundCombined*.urls` and downloads the largest bank asset.
-    private func fetchArtworkFromURLSidecar(udid: String, pkpassDir: String) async -> Data? {
+    private func fetchArtworkFromURLSidecar(udid: String, pkpassDir: String) async throws -> Data? {
         let sidecars = [
             "cardBackgroundCombined.png.urls",
             "cardBackgroundCombined@2x.png.urls",
             "cardBackgroundCombined@3x.png.urls"
         ]
         for leaf in sidecars {
-            guard let raw = AirliftBridge.shared.readFile(udid: udid, target: pkpassDir, leaf: leaf, retries: 1),
+            guard let raw = try readArtworkFile(udid: udid, target: pkpassDir, leaf: leaf),
                   let assets = Self.parsePassAssetURLs(raw), !assets.isEmpty else {
                 continue
             }
@@ -202,8 +209,23 @@ public final class CardAssetManager {
                     return data
                 }
             }
+            throw AirliftReadFailure(message: "\(leaf): remote artwork download or validation failed")
         }
         return nil
+    }
+
+    /// Try another filename only after a completed response says it is unavailable.
+    /// Transport, restoration and cleanup failures must stop this card's fetch.
+    private func readArtworkFile(udid: String, target: String, leaf: String) throws -> Data? {
+        var failures: [AirliftReadFailure] = []
+        let data = AirliftBridge.shared.readFile(udid: udid, target: target, leaf: leaf, retries: 1) {
+            failures.append($0)
+        }
+        if !failures.isEmpty {
+            throw AirliftReadFailure(message: "\(leaf): " + failures.map(\.message).joined(separator: "; "), requiresRecovery: failures.contains { $0.requiresRecovery },
+                                     deviceUnresponsive: failures.contains { $0.deviceUnresponsive })
+        }
+        return data
     }
 
     private struct RemotePassAsset {
@@ -272,7 +294,10 @@ public final class CardAssetManager {
     /// Bank artwork is full-bleed. Wallet's composited face is a rounded card on a
     /// transparent canvas, with the last four digits already painted into the pixels.
     static func isBankArtwork(_ data: Data) -> Bool {
-        guard isRasterImage(data), !isCompositedWalletFace(data) else { return false }
+        guard isRasterImage(data),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceCreateImageAtIndex(source, 0, nil) != nil,
+              !isCompositedWalletFace(data) else { return false }
         return true
     }
 
@@ -311,21 +336,39 @@ public final class CardAssetManager {
         originalsDirectory.appendingPathComponent("\(cardHash).png")
     }
 
-    /// A card is "backed up" exactly when its original PNG exists on disk.
+    /// A backup must contain a readable original, rather than just a filename.
     public func hasOriginal(for cardHash: String) -> Bool {
-        FileManager.default.fileExists(atPath: originalFileURL(for: cardHash).path)
+        let url = originalFileURL(for: cardHash)
+        guard let key = validationKey(for: url) else { return false }
+        if let known = originalValidationCache.object(forKey: key) { return known.boolValue }
+        let valid = originalPNGData(for: cardHash) != nil
+        originalValidationCache.setObject(NSNumber(value: valid), forKey: key)
+        return valid
+    }
+
+    private func validationKey(for url: URL) -> NSString? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]),
+              values.isRegularFile == true, let size = values.fileSize, let modified = values.contentModificationDate else { return nil }
+        return "\(url.path)|\(size)|\(modified.timeIntervalSinceReferenceDate)" as NSString
     }
 
     public func customCacheURL(for cardHash: String) -> URL {
         customCacheDirectory.appendingPathComponent(cardHash).appendingPathComponent("custom.png")
     }
 
-    public func saveOriginal(cardHash: String, data: Data) {
-        guard Self.isBankArtwork(data) else { return }
+    @discardableResult
+    public func saveOriginal(cardHash: String, data: Data) -> Bool {
+        guard Self.isBankArtwork(data) else { return false }
         let url = originalFileURL(for: cardHash)
-        try? FileManager.default.createDirectory(at: originalsDirectory, withIntermediateDirectories: true)
-        try? data.write(to: url)
-        imageCache.removeObject(forKey: url.path as NSString)
+        do {
+            try FileManager.default.createDirectory(at: originalsDirectory, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            imageCache.removeObject(forKey: url.path as NSString)
+            if let key = validationKey(for: url) { originalValidationCache.setObject(true, forKey: key) }
+            return true
+        } catch {
+            return false
+        }
     }
 
     public func saveCachedCustom(cardHash: String, data: Data) {
@@ -461,8 +504,7 @@ public final class CardAssetManager {
                 guard CardHashScanner.isValid(cardHash), !hasOriginal(for: cardHash) else { continue }
                 guard let data = try? Data(contentsOf: dir.appendingPathComponent("original.png")),
                       Self.isBankArtwork(data) else { continue }
-                saveOriginal(cardHash: cardHash, data: data)
-                migrated += 1
+                if saveOriginal(cardHash: cardHash, data: data) { migrated += 1 }
             }
         }
 

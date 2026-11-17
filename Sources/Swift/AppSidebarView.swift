@@ -27,7 +27,7 @@ struct AppSidebarView: View {
                     HStack(spacing: 6) {
                         Text("WaveCard")
                             .font(.system(size: 15, weight: .bold))
-                        Text("2.1")
+                        Text("2.2")
                             .font(.system(size: 10, weight: .heavy))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
@@ -78,6 +78,7 @@ struct AppSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Refresh connected device")
+                    .disabled(!vm.canRefreshDevice)
                 }
 
                 if let dev = vm.device {

@@ -58,6 +58,59 @@ struct CardHashScannerTest {
         expect(CardHashScanner.quotedPassID(in: "\"has spaces here\"") == nil, "reject quoted sentence")
         expect(CardHashScanner.quotedPassID(in: "VwQQFLDxEpWKfBeCbF6ICdGzEI8=") == nil, "require quotes")
 
+        expect(
+            CardHashScanner.passIDs(in: "    \"AbCdEfGhIjKlMnOpQrStUvWxYz0123\"") == ["AbCdEfGhIjKlMnOpQrStUvWxYz0123"],
+            "quoted id of non-28 length is detected"
+        )
+        expect(
+            CardHashScanner.passIDs(in: "    \"VwQQFLDxEpWKfBeCbF6ICdGzEI8=\"") == ["VwQQFLDxEpWKfBeCbF6ICdGzEI8="],
+            "quoted id is not duplicated"
+        )
+
+        let a = String(repeating: "A", count: 27) + "="
+        let b = String(repeating: "B", count: 27) + "="
+        let dashboard32 = String(repeating: "C", count: 32)
+        let aid = "A00000000310100100000020"
+        let long = String(repeating: "D", count: 45)
+        let records: [(String, [String])] = [
+            ("Passbook(PassKitUI): Dashboard loading (details): for \(a), pass feature unknown", [a]),
+            ("Passbook(PassKitUI): Dashboard loading (details): \(dashboard32) - m:NO, sm:NO", [dashboard32]),
+            ("passd(PassKit): PDCardFileManager: writing card \(a)", [a]),
+            ("passd(PassKit): PDPassLibrary: wrote pass \(a)", [a]),
+            ("passd(PassKit): VerificationCheck.\(a)", [a]),
+            ("Passbook(PassKitUI): updated selected pass uniqueID: \"\(a)\"", [a]),
+            ("nfcd(NearField): passIDs[InSession]: {(\n  \"\(a)\",\n  \"\(dashboard32)\"\n)} passIDs[global]: {(\"\(b)\")}", [a, dashboard32, b]),
+            ("nfcd(NearField): passIDs[global]: {(\"\(a)\", \"\(a)\")}", [a]),
+            ("OtherApp(CoreFoundation): /var/mobile/Library/Passes/Cards/\(a).pkpass/en.lproj/a", [a]),
+            ("OtherApp(CoreFoundation): Dashboard loading: for \(a), unknown", []),
+            ("OtherApp(CoreFoundation): passIDs[InSession]: {(\"\(a)\")}", []),
+            ("nfcd(NearField): setActivePaymentApplet: requestedApplet: {identifier=\(aid)}", []),
+            ("nfcd(NearField): setActivePaymentApplet: requestedApplet: {\"identifier\":\"\(aid)\"}", []),
+            ("nfcd(NearField): \"\(aid)\"", []),
+            ("nfcd(NearField): \"\(a)\"", []),
+            ("nfcd(NearField): identifier=\(a)", []),
+            ("Passbook(PassKitUI): selected pass uniqueID: <private>, diagnostic \(a)", []),
+            ("passd(PassKit): PDCardFileManager: writing card <redacted>, diagnostic \(a)", []),
+            ("Passbook(PassKitUI): Dashboard loading: for \(long), diagnostic \(a)", []),
+            ("Passbook(PassKitUI): selected pass uniqueID: \(long), diagnostic \(a)", []),
+            ("passd(PassKit): /Library/Passes/Cards/\(long).pkpass diagnostic \(a)", []),
+            ("passd(PassKit): /Library/Passes/Cards/\(a).pkpassSuffix", []),
+            ("nfcd(NearField): passIDs[InSession]: {(\"\(long)\")} diagnostic \(a)", []),
+            ("nfcd(NearField): passIDs[InSession]: {(\"\(a)\", malformed)}", []),
+            ("nfcd(NearField): passIDs[InSession]: {(\"\(a)\" diagnostic", []),
+            ("nfcd(NearField): passIDs[unknown]: {(\"\(a)\")}", []),
+            ("nfcd(NearField): passIDs[InSession]: {(<private>)} \"\(aid)\"", []),
+            ("Passbook(PassKitUI): passUniqueID:\(a)", [a]),
+            ("passd(PassKit): card diagnostic \(a)", [a]),
+            ("passd(PassKit): unrelated \(a)", []),
+            ("passd(PassKit): card diagnostic \(a)=", []),
+            ("OtherApp(CoreFoundation): /Library/Passes/Cards/\(b).pkpass Dashboard loading: for \(a), x", [b]),
+        ]
+        for (record, expected) in records {
+            let found = CardHashScanner.detectedPassIDs(inRecord: record)
+            expect(found == expected, "record \(record) -> \(found), expected \(expected)")
+        }
+
         if failed == 0 {
             print("ok")
         } else {

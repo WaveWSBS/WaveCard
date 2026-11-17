@@ -141,6 +141,7 @@ struct CardsWorkspaceView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(vm.isScanningCards ? .red : .accentColor)
+                .disabled(!vm.isScanningCards && !vm.canStartScanning)
                 .help(vm.isScanningCards ? "Stop listening for cards" : "Scan device logs while opening Apple Wallet")
 
                 // Add card manually
@@ -183,7 +184,7 @@ struct CardsWorkspaceView: View {
                 Button(action: { vm.fetchAllOriginals() }) {
                     Label("Fetch All Originals", systemImage: "arrow.down.doc")
                 }
-                .disabled(vm.cards.isEmpty || vm.isScanningCards || vm.isFetchingOriginals || vm.isFlashing || vm.device == nil)
+                .disabled(vm.cards.isEmpty || !vm.canStartDeviceOperation || vm.isFetchingOriginals)
                 .help(vm.isScanningCards
                       ? "Please finish or stop scanning first"
                       : "Read and store the original Apple artwork for every card missing one")
@@ -192,7 +193,7 @@ struct CardsWorkspaceView: View {
                 Button(action: { vm.showRestoreAllConfirm = true }) {
                     Label("Restore All", systemImage: "arrow.counterclockwise")
                 }
-                .disabled(vm.cards.isEmpty || vm.isRestoring || vm.device == nil || vm.isScanningCards)
+                .disabled(vm.cards.isEmpty || !vm.canStartDeviceOperation)
                 .help("Rebuild factory artwork on every card that has an original stored")
 
                 // Flash Action (Prominent)
@@ -202,7 +203,7 @@ struct CardsWorkspaceView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.purple)
-                .disabled(vm.cards.isEmpty || vm.isFlashing || vm.device == nil)
+                .disabled(vm.cards.isEmpty || !vm.canStartDeviceOperation)
                 .help("Flash custom skins to selected cards via native Airlift")
 
                 // Batch export of stored originals

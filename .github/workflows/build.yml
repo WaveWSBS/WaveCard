@@ -15,20 +15,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: AirTraffic protocol tests (mock transport)
+        run: |
+          xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation -framework CoreFoundation tests/test_airtraffic_protocol.m -o /tmp/test_airtraffic_protocol
+          /tmp/test_airtraffic_protocol
+
       - name: os_trace decoder tests
         run: |
           xcrun clang -fobjc-arc -framework Foundation tests/test_os_trace.m -o /tmp/test_os_trace
           /tmp/test_os_trace
+
+      - name: Wallet trace prefilter tests
+        run: |
+          xcrun clang -fobjc-arc -Wall -Wextra -framework Foundation tests/test_wallet_trace_filter.m -o /tmp/test_wallet_trace_filter
+          /tmp/test_wallet_trace_filter
 
       - name: card hash scanner tests
         run: |
           swiftc -O -parse-as-library tests/test_card_hash_scanner.swift Sources/Swift/CardHashScanner.swift -o /tmp/test_card_hash_scanner
           /tmp/test_card_hash_scanner
 
+      - name: local Wallet metadata name tests
+        run: |
+          swiftc -parse-as-library tests/test_wallet_metadata_catalog.swift Sources/Swift/WalletMetadataCatalog.swift Sources/Swift/CardHashScanner.swift -o /tmp/test_wallet_metadata_catalog
+          /tmp/test_wallet_metadata_catalog
+
+      - name: Wallet preview image tests
+        run: |
+          swiftc -parse-as-library tests/test_wallet_preview_loader.swift Sources/Swift/WalletPreviewLoader.swift -o /tmp/test_wallet_preview_loader
+          /tmp/test_wallet_preview_loader
+
+      - name: payment Wallet preview tests
+        run: |
+          swiftc -parse-as-library tests/test_wallet_payment_preview_loader.swift Sources/Swift/WalletPaymentPreviewLoader.swift Sources/Swift/WalletMetadataCatalog.swift Sources/Swift/WalletPreviewLoader.swift -o /tmp/test_wallet_payment_preview_loader
+          /tmp/test_wallet_payment_preview_loader
+
       - name: card exporter tests
         run: |
           swiftc -O -parse-as-library tests/test_card_exporter.swift Sources/Swift/CardExporter.swift -o /tmp/test_card_exporter
           /tmp/test_card_exporter
+
+      - name: artwork failure tests (mock device helpers)
+        run: |
+          swiftc -parse-as-library tests/test_artwork_failures.swift Sources/Swift/*.swift -o /tmp/test_artwork_failures
+          /tmp/test_artwork_failures
+
+      - name: bridge recovery tests (mock device helpers)
+        run: |
+          swiftc -parse-as-library tests/test_bridge_recovery.swift Sources/Swift/*.swift -o /tmp/test_bridge_recovery
+          /tmp/test_bridge_recovery
+
+      - name: device operation state tests (no device)
+        run: |
+          swiftc -parse-as-library tests/test_app_view_model.swift Sources/Swift/*.swift -o /tmp/test_app_view_model
+          /tmp/test_app_view_model
 
   build:
     needs: test

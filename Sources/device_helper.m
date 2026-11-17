@@ -6,6 +6,7 @@
 
 #import "airlift_target.h"
 #import "os_trace.h"
+#import "wallet_trace_filter.h"
 
 typedef const void *AMDeviceRef;
 typedef const void *AMDeviceNotificationRef;
@@ -143,13 +144,14 @@ static void DeviceCallback(AMDeviceNotificationCallbackInfo *info,
     CFRunLoopStop(CFRunLoopGetMain());
 }
 
+// Match upstream AirCard's mux discovery. RemoteXPC can replace the mux
+// transport rather than adding another route; Wallet operations use USB here.
 static NSDictionary *SubscriptionOptions(BOOL directConnectionsOnly) {
     return @{
         @"NotificationOptionSearchForPairedDevices": @YES,
         @"NotificationOptionSearchForPairedDevicesViaDirectConnectionsOnly":
             @(directConnectionsOnly),
         @"NotificationOptionSearchForWiFiPairableDevices": @NO,
-        @"NotificationOptionEnableRemoteXPC": @YES,
         @"NotificationOptionEnableUSBMux": @YES,
     };
 }
@@ -162,7 +164,7 @@ static int FindTarget(void) {
         0,
         NULL,
         &subscription,
-        (__bridge CFDictionaryRef)SubscriptionOptions(NO));
+        (__bridge CFDictionaryRef)SubscriptionOptions(YES));
     if (status == 0)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 30.0, false);
     if (subscription) AMDeviceNotificationUnsubscribe(subscription);
@@ -249,22 +251,6 @@ static int ListDevices(void) {
     return status == 0 ? 0 : 2;
 }
 
-// Wallet card identifiers only appear on resource-lookup records that mention
-// the pass bundle. The unified log is gigabytes per session, so forwarding it
-// whole starves live detection; keep only records that can carry an identifier.
-static BOOL WaveCardTraceLineHasPassSignal(NSString *line) {
-    if (getenv("WAVECARD_SYSLOG_UNFILTERED")) return YES;
-    static NSArray<NSString *> *signals;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        signals = @[ @"Passes/Cards", @".pkpass", @"NanoPasses", @".pkcache", @"passIDs" ];
-    });
-    for (NSString *signal in signals) {
-        if ([line rangeOfString:signal].location != NSNotFound) return YES;
-    }
-    return NO;
-}
-
 static int StreamDeviceLogs(AMDServiceConnectionRef connection) {
     // syslog_relay omits the Info/Debug resource lookups containing Wallet card
     // identifiers on iOS 18. Request the unified activity stream instead.
@@ -307,6 +293,13 @@ static int StreamDeviceLogs(AMDServiceConnectionRef connection) {
             NSString *line = WaveCardTraceLogLine(record);
             if (line && WaveCardTraceLineHasPassSignal(line)) {
                 NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+                if (getenv("WAVECARD_SYSLOG_JSON")) {
+                    NSData *json = [NSJSONSerialization dataWithJSONObject:@{ @"line": line } options:0 error:nil];
+                    if (!json) continue;
+                    NSMutableData *recordData = json.mutableCopy;
+                    [recordData appendBytes:"\n" length:1];
+                    data = recordData;
+                }
                 if (fwrite(data.bytes, 1, data.length, stdout) != data.length ||
                     fflush(stdout) != 0) return 2;
             }
@@ -691,6 +684,9 @@ static BOOL EnsureBooksParent(AFCConnectionRef afc, NSString *path) {
 static NSDictionary *RestoreBooksState(AFCConnectionRef afc, NSString *root) {
     NSDictionary *snapshot = LoadBooksSnapshot(root);
     if (!snapshot) return @{ @"ok": @NO, @"error": @"invalid snapshot" };
+    if (BooksStateMatchesSnapshot(afc, root, snapshot))
+        return @{ @"ok": @YES, @"failures": @[],
+                  @"preimageVerified": @YES, @"alreadyMatched": @YES };
     NSMutableArray<NSString *> *failures = NSMutableArray.array;
     NSDictionary *files = snapshot[@"files"];
 
@@ -702,6 +698,8 @@ static NSDictionary *RestoreBooksState(AFCConnectionRef afc, NSString *root) {
         if ([row[@"exists"] boolValue]) {
             NSData *data = [NSData dataWithContentsOfFile:
                 [root stringByAppendingPathComponent:SnapshotFileName(index)]];
+            NSData *observed = AFCReadFileWithLimit(afc, path, 128 * 1024 * 1024);
+            if (data && observed && [data isEqualToData:observed]) continue;
             if (!data || !EnsureBooksParent(afc, path) ||
                 !AFCWriteFile(afc, path, data)) [failures addObject:path];
         } else if (!RemoveIfPresent(afc, path)) {

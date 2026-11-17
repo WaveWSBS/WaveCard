@@ -28,6 +28,9 @@ struct MainContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            vm.stopBackgroundActivityForTermination()
+        }
         .sheet(isPresented: $vm.showAddCardSheet) {
             VStack(spacing: 16) {
                 Text("Add Card Manually")

@@ -94,7 +94,7 @@ struct CardInspectorView: View {
 
                         // Artwork Section: Original vs Custom
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("ORIGINAL APPLE PASS ARTWORK")
+                            Text(originalImage == nil && vm.walletPreviews[cardId] != nil ? "WALLET PREVIEW" : "ORIGINAL APPLE PASS ARTWORK")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundColor(.secondary)
 
@@ -108,6 +108,20 @@ struct CardInspectorView: View {
                                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                                             .stroke(Color.white.opacity(0.15), lineWidth: 1)
                                     )
+                            } else if let preview = vm.walletPreviews[cardId] {
+                                Image(nsImage: preview.image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: .infinity)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .accessibilityLabel("Wallet preview for \(card.label)")
+                                Text("Preview available. Factory artwork has not been backed up.")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                Button("Fetch Original from iPhone") { vm.loadOriginalArtwork(for: card) }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(!vm.canStartDeviceOperation)
                             } else if vm.loadingImages.contains(card.id) {
                                 HStack {
                                     ProgressView().scaleEffect(0.7)
@@ -128,7 +142,7 @@ struct CardInspectorView: View {
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
-                                    .disabled(vm.device == nil)
+                                    .disabled(!vm.canStartDeviceOperation)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 90)
                                 .background(Color(NSColor.controlBackgroundColor))
@@ -196,7 +210,7 @@ struct CardInspectorView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.regular)
-                            .disabled(vm.isExporting)
+                            .disabled(vm.isExporting || !hasStoredOriginal)
                             .help("Save this card's original Apple artwork as a PNG file")
 
                             if hasStoredOriginal {
@@ -207,7 +221,7 @@ struct CardInspectorView: View {
                                 .buttonStyle(.bordered)
                                 .tint(.green)
                                 .controlSize(.regular)
-                                .disabled(vm.isRestoring || vm.isScanningCards || vm.isFlashing)
+                                .disabled(!vm.canStartDeviceOperation)
                             }
 
                             Button(role: .destructive, action: { vm.deleteCard(id: card.id) }) {
